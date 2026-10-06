@@ -796,7 +796,8 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" rowGap={1}>
-        <Box columnGap={1} alignItems="center">
+        {/* Its own rounded box, one per plugin, so stacked bands stay apart. */}
+        <Box columnGap={1} alignItems="center" borderStyle="round" borderDimColor paddingX={1}>
           <Box width={2}>
             {band.kind === 'running' && <Text color="warning">⠹</Text>}
             {band.kind === 'advice' && <Text color="warning">i</Text>}
