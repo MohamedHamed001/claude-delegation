@@ -796,8 +796,8 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" rowGap={1}>
-        {/* Its own rounded box, one per plugin, so stacked bands stay apart. */}
-        <Box columnGap={1} alignItems="center" borderStyle="round" borderDimColor paddingX={1}>
+        {/* Its own filled card, one per plugin, so stacked bands read as separate. */}
+        <Box columnGap={1} alignItems="center" backgroundColor="userMessageBackground" paddingX={1}>
           <Box width={2}>
             {band.kind === 'running' && <Text color="warning">⠹</Text>}
             {band.kind === 'advice' && <Text color="warning">i</Text>}
@@ -807,7 +807,7 @@ export const register: Register = on => {
             )}
           </Box>
 
-          <Box flexGrow={1} flexShrink={1}>
+          <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
             {band.kind === 'running' && (
               <Text wrap="truncate-end">
                 {who} · {job.title} · {formatElapsed(time - job.startedAt)}
@@ -888,7 +888,7 @@ export const register: Register = on => {
             {running.map(job => (
               <Box columnGap={1} alignItems="center">
                 <Text color="warning">⠹</Text>
-                <Box flexGrow={1} flexShrink={1}>
+                <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                   <Text>
                     {job.worker}
                     {job.model ? ` (${job.model})` : ''} · {job.title}
@@ -913,7 +913,7 @@ export const register: Register = on => {
                   <Text color={job.status === 'done' ? 'success' : job.status === 'running' ? 'warning' : 'error'}>
                     {statusMark[job.status]}
                   </Text>
-                  <Box flexGrow={1} flexShrink={1}>
+                  <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                     <Text>
                       {job.worker} · {job.title}
                     </Text>
