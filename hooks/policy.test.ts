@@ -97,3 +97,42 @@ test('a codex-companion review is read-only and allowed', async ($, on) => {
 
   expect(ran).toBe(true)
 })
+
+/** Answers the Sol dialog with `answer`; any other tool call counts as the run starting. */
+function solDialog(on: any, answer: string) {
+  const state = { ran: false, asked: '' }
+  on('clock.now', () => ({ value: 1_000 }))
+  on('tool.call', (_: unknown, e: { tool: string; questions: Array<{ question: string }> }) => {
+    if (e.tool === 'AskUserQuestion') {
+      state.asked = e.questions[0].question
+
+      return { result: { questions: e.questions, answers: { [state.asked]: answer } } } as never
+    }
+    state.ran = true
+
+    return { result: { text: 'review done' } } as never
+  })
+
+  return state
+}
+
+const ADVERSARIAL = 'node "/plugins/codex/scripts/codex-companion.mjs" adversarial-review --wait'
+
+test('a Sol run asks first, and Cancel stops it', async ($, on) => {
+  const state = solDialog(on, 'Cancel')
+  const answer = await $.tool.call({ tool: 'Bash', command: ADVERSARIAL } as never)
+
+  expect(state.asked).toContain('gpt-6.1-sol')
+  expect(state.ran).toBe(false)
+  expect(JSON.stringify(answer)).toContain('cancelled this Codex run')
+})
+
+test('a Sol run starts after Run it; a Luna run is never asked about', async ($, on) => {
+  const state = solDialog(on, 'Run it')
+  await $.tool.call({ tool: 'Bash', command: ADVERSARIAL } as never)
+  expect(state.ran).toBe(true)
+
+  state.asked = ''
+  await $.tool.call({ tool: 'Bash', command: `${ADVERSARIAL} --model gpt-6-luna` } as never)
+  expect(state.asked).toBe('')
+})

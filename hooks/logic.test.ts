@@ -11,7 +11,9 @@ import {
   EMPTY_DAY,
   filesNamed,
   formatElapsed,
+  isScarceRun,
   isSmall,
+  scarceQuestion,
   parseRelay,
   subagentWorker,
   titleFromBrief,
@@ -235,4 +237,29 @@ test('an agy job is done, failed, running or has no result', () => {
   )
   expect(table).toContain('| agy-1 | review | running | m | 1m 30s ago | auth |')
   expect(agyStatusTable([], 0)).toContain('No agy jobs yet')
+})
+
+test('only runs that would use Sol are scarce', () => {
+  expect(isScarceRun('gpt-6.1-sol', null, 'task')).toBe(true)
+  expect(isScarceRun(null, 'deep-review', null)).toBe(true)
+  expect(isScarceRun(null, null, 'adversarial-review')).toBe(true) // Sol is its default
+  expect(isScarceRun('gpt-6-luna', null, 'adversarial-review')).toBe(false) // a named model wins
+  expect(isScarceRun('gpt-6-luna', 'implement', null)).toBe(false)
+  expect(isScarceRun(null, 'review', 'review')).toBe(false)
+})
+
+test('the scarce question says the model, the lane and how much is sent', () => {
+  const question = scarceQuestion({ model: null, lane: 'deep-review', brief: 'Review src/a.py and src/b.py for races.' })
+  expect(question).toContain('gpt-6.1-sol')
+  expect(question).toContain('lane deep-review')
+  expect(question).toContain('names 2 files')
+})
+
+test('a relay or companion named inside a heredoc is file text, not a run', () => {
+  const companion = 'node x/codex-' + 'companion.mjs'
+  const writesATest = `cat >> policy.test.ts <<'EOF'\n${companion} adversarial-review --wait\nEOF\nnpm test`
+  expect(parseCompanion(writesATest)).toBe(null)
+  expect(parseRelay('cat > notes.md <<EOF\nnode a/codex-delegate/scripts/relay.mjs --brief b.txt\nEOF')).toBe(null)
+  // A real call before a heredoc still counts.
+  expect(parseCompanion(`${companion} review --wait <<'EOF'\nstdin\nEOF`)?.subcommand).toBe('review')
 })

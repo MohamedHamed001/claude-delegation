@@ -58,10 +58,20 @@ function flag(command: string, name: string): string | null {
 }
 
 /**
+ * The part of a shell command that is actually run. A heredoc (`cat > file <<'EOF' ...`)
+ * carries a file's text inside the command; that text can mention a relay or the companion
+ * without calling it, so everything from the first heredoc marker on is left out.
+ */
+export function runPart(command: string): string {
+  return command.split(/<<-?\s*['"]?\w+/)[0]
+}
+
+/**
  * Recognise a delegation in a shell command: a `relay.mjs` call with a brief.
  * Returns null for anything else, including `relay.mjs --help`.
  */
-export function parseRelay(command: string): RelayCall | null {
+export function parseRelay(fullCommand: string): RelayCall | null {
+  const command = runPart(fullCommand)
   const relay = command.match(/([\w-]+-delegate)[\\/]scripts[\\/]relay\.mjs/)
   if (!relay) {
     return null
@@ -322,7 +332,8 @@ function lastQuoted(command: string): string {
 }
 
 /** Recognise a codex-companion.mjs call in a shell command, or null. */
-export function parseCompanion(command: string): CompanionCall | null {
+export function parseCompanion(fullCommand: string): CompanionCall | null {
+  const command = runPart(fullCommand)
   const match = command.match(/codex-companion\.mjs["']?\s+([a-z-]+)/)
   if (!match) {
     return null
@@ -335,6 +346,37 @@ export function parseCompanion(command: string): CompanionCall | null {
     model: flag(command, 'model'),
     text: lastQuoted(command),
   }
+}
+
+// ---- Scarce runs: ask before spending the Sol allowance ----------------------------------
+//
+// Sol (gpt-6.1-sol) is the strongest Codex model and its allowance is small: one large
+// adversarial review can use most of it. So a run that would use Sol first shows what is
+// about to be sent and waits for a yes. Cheaper models (Luna) run without a question.
+
+/**
+ * Would this Codex run use Sol? True when the model is named as Sol, when the lane is
+ * `deep-review` (mapped to Sol), or for an adversarial review with no model given (Sol is
+ * its default).
+ */
+export function isScarceRun(model: string | null, lane: string | null, subcommand: string | null): boolean {
+  if (model) {
+    return /sol/i.test(model)
+  }
+
+  return lane === 'deep-review' || subcommand === 'adversarial-review'
+}
+
+/** The question shown before a scarce run: model, lane, and how much is being sent. */
+export function scarceQuestion(run: { model: string | null; lane: string | null; brief: string }): string {
+  const model = run.model ?? 'gpt-6.1-sol (the default here)'
+  const lane = run.lane ? `, lane ${run.lane}` : ''
+  const files = filesNamed(run.brief)
+  const size = run.brief
+    ? `The brief is ${run.brief.length.toLocaleString('en-US')} characters and names ${files} file${files === 1 ? '' : 's'}.`
+    : 'It reviews the current changes; no brief text.'
+
+  return `Claude is about to start a Codex run on ${model}${lane}, the scarce model. ${size} Run it?`
 }
 
 /** The job id a background companion task reports, or null. */

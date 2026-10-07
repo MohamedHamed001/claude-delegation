@@ -41,6 +41,7 @@ import {
   isCodexRescue,
   isReadOnly,
   isReadOnlyRequest,
+  isScarceRun,
   isSmall,
   killMatchingArgv,
   laneMapText,
@@ -49,6 +50,7 @@ import {
   platformFromUname,
   parseRelay,
   refusalReason,
+  scarceQuestion,
   userAskedToDelegate,
   subagentWorker,
   titleFromBrief,
@@ -251,6 +253,37 @@ async function readBrief($: EngineInterface, path: string): Promise<string> {
   } catch {
     return ''
   }
+}
+
+const SCARCE_RUN = 'Run it'
+const SCARCE_CANCEL = 'Cancel'
+
+/**
+ * Before a Codex run on the scarce model: show what is about to be sent and wait for a yes.
+ * Returns the refusal text when the person cancels, or null to let the run start.
+ */
+async function scarceRefusal(
+  $: EngineInterface,
+  run: { model: string | null; lane: string | null; subcommand: string | null; brief: string },
+): Promise<string | null> {
+  if (!isScarceRun(run.model, run.lane, run.subcommand)) {
+    return null
+  }
+  let answer = SCARCE_CANCEL
+  try {
+    answer = await $.ui.ask(scarceQuestion(run), { header: 'Codex Sol', options: [SCARCE_RUN, SCARCE_CANCEL] })
+  } catch {
+    // Dismissed: treat it as Cancel, so the allowance is never spent by accident.
+  }
+  if (answer === SCARCE_RUN) {
+    return null
+  }
+
+  return (
+    "The user cancelled this Codex run in the delegation plugin's dialog" +
+    (answer !== SCARCE_CANCEL ? ` and wrote: "${answer}"` : '') +
+    '. Do not retry it; ask whether to narrow the brief or use a cheaper model (gpt-6-luna).'
+  )
 }
 
 // ---- The bundled worker commands: /codex-* and /agy-* ------------------------------------
@@ -660,6 +693,16 @@ export const register: Register = on => {
     on('tool.call', { tool: shell }, async ($, e, next) => {
       const companion = parseCompanion(e.command)
       if (companion && COMPANION_WORK.has(companion.subcommand)) {
+        const cancelled = await scarceRefusal($, {
+          model: companion.model,
+          lane: null,
+          subcommand: companion.subcommand,
+          brief: companion.text,
+        })
+        if (cancelled) {
+          return { deny: cancelled }
+        }
+
         return runCompanion($, e, next, companion)
       }
 
@@ -674,6 +717,12 @@ export const register: Register = on => {
         $.ui.toast('Refused a small delegation: doing it directly is cheaper')
 
         return { deny: refusal }
+      }
+      if (relay.worker === 'Codex') {
+        const cancelled = await scarceRefusal($, { model: relay.model, lane: relay.lane, subcommand: null, brief })
+        if (cancelled) {
+          return { deny: cancelled }
+        }
       }
 
       const background = e.run_in_background === true

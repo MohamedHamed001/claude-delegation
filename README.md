@@ -128,6 +128,10 @@ Without a lane map the commands use the defaults above.
 - **The official Codex plugin.** This plugin bundles it (see [Credits](#licence)).
   If `codex@openai-codex` is installed as well, the bundled `/codex-*` commands step aside and
   point to its `/codex:*` ones; the policy and job tracking still apply to them.
+- **Sol asks first.** Sol (`gpt-6.1-sol`) has a small allowance. A Codex run that would use it (a
+  Sol `--model`, the `deep-review` lane, or an adversarial review with no model given) first shows
+  the model, the lane, and the brief's size and file count, with **Run it** and **Cancel**. Runs on
+  other models start without a question.
 - **Cost figures.** Claude subagents report tokens, so their cost is shown. Codex and agy report
   nothing to Claude, so they show as calls and time, with the Opus requests made while they ran.
 
