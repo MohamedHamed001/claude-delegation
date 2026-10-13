@@ -257,30 +257,22 @@ export function subagentLabel(subagentType: string | undefined, model: string | 
   return `${subagentType ?? 'general-purpose'}/${family}`
 }
 
+/** Which pet a job gets: one design per model or worker. */
+export type PetKind = 'opus' | 'sonnet' | 'haiku' | 'codex' | 'agy' | 'claude'
+
 /**
- * The pet's colour, from words in its caption, checked in this order (the first match
- * wins, so "codex:research" is green): fast reading, then building, then thinking,
- * then the relay's own colour, then orange for anything else.
+ * The pet for a job, from its caption, worker and model. The relays come first, so a
+ * Codex rescue run by a Sonnet forwarder is still Codex; anything unknown is plain Claude.
  */
-export function petColour(label: string): string {
-  const text = label.toLowerCase()
-  if (/haiku|explore|research/.test(text)) {
-    return 'green'
-  }
-  if (/sonnet|feature/.test(text)) {
-    return 'blue'
-  }
-  if (/opus|second-opinion|plan/.test(text)) {
-    return 'magenta'
-  }
-  if (/codex/.test(text)) {
-    return 'yellow'
-  }
-  if (/agy/.test(text)) {
-    return '#ff87d7' // pink
+export function petKind(job: Job): PetKind {
+  const text = `${job.label ?? ''} ${job.worker} ${job.model ?? ''}`.toLowerCase()
+  for (const kind of ['agy', 'codex', 'haiku', 'sonnet', 'opus'] as const) {
+    if (text.includes(kind)) {
+      return kind
+    }
   }
 
-  return '#ff8700' // orange
+  return 'claude'
 }
 
 /**
@@ -294,13 +286,122 @@ export function bandJobs(jobs: readonly Job[], clearedAt: number): Job[] {
 }
 
 /**
- * The pet's two rows: a body over legs. A running job's legs swap every frame; a
- * finished one stands still.
+ * One pet design, as square pixels: '#' is the body, '.' is empty (the eyes are empty
+ * pixels), any other letter takes its colour from the palette. The body is one colour,
+ * or a list of colours, one per column (agy's rainbow).
  */
-export function petSprite(job: Job, frame: number): [string, string] {
-  const walking = job.status === 'running' && frame % 2 === 1
+type PetDesign = {
+  pixels: readonly string[]
+  body: string | readonly string[]
+  palette: Readonly<Record<string, string>>
+}
 
-  return ['▄█▄', walking ? '▝ ▘' : '▘ ▝']
+const CLAWD = ['.########.', '.#.####.#.', '##.####.##', '##########', '.#.#..#.#.', '.#.#..#.#.']
+
+/** Clawd, and how each model dresses it up. */
+export const PET_DESIGNS: Readonly<Record<PetKind, PetDesign>> = {
+  // A gold monocle around the right eye, its chain hanging down.
+  opus: {
+    pixels: ['.#####ggg.', '.#.###g.g.', '##.###g.g#', '######ggg#', '.#.#..#.#g', '.#.#..#.#.'],
+    body: '#d97757',
+    palette: { g: '#e5c07b' },
+  },
+  // Holding a hammer: grey head, wooden handle.
+  sonnet: {
+    pixels: ['.########.HHH', '.#.####.#..h.', '##.####.##.h.', '###########h.', '.#.#..#.#..h.', '.#.#..#.#....'],
+    body: '#61afef',
+    palette: { H: '#abb2bf', h: '#a0703c' },
+  },
+  // Smaller: two rows instead of three.
+  haiku: {
+    pixels: ['.######.', '##.##.##', '.######.', '.#.##.#.'],
+    body: '#ff87d7',
+    palette: {},
+  },
+  // Winking: the left eye a closed slit.
+  codex: {
+    pixels: ['.########.', '.######.#.', '##..###.##', '##########', '.#.#..#.#.', '.#.#..#.#.'],
+    body: '#c678dd',
+    palette: {},
+  },
+  agy: {
+    pixels: CLAWD,
+    body: ['#e06c75', '#e5a54b', '#e5c07b', '#98c379', '#56b6c2', '#61afef', '#7a7fe8', '#c678dd', '#e06c9f', '#e06c75'],
+    palette: {},
+  },
+  claude: { pixels: CLAWD, body: '#d97757', palette: {} },
+}
+
+/** A run of cells drawn in one Text: same colour, same background. */
+export type PetRun = { text: string; color?: string; backgroundColor?: string }
+
+/** Mid-step: the front leg of each pair lifted, by clearing every other foot pixel. */
+function stepping(pixels: readonly string[]): string[] {
+  const rows = [...pixels]
+  let foot = 0
+  rows[rows.length - 1] = [...(rows.at(-1) ?? '')]
+    .map(pixel => (pixel !== '.' && foot++ % 2 === 0 ? '.' : pixel))
+    .join('')
+
+  return rows
+}
+
+/**
+ * The pet's text rows, ready to draw. Each text cell holds two pixels, one above the other:
+ * ▀ the top, ▄ the bottom, █ both; when both are filled in different colours the cell is
+ * ▀ in the top colour on a background of the bottom colour. Cells next to each other with
+ * the same colours are joined into one run. A failed job's pet is all red; a running
+ * one steps on odd frames.
+ */
+export function petRows(job: Job, frame: number): PetRun[][] {
+  const design = PET_DESIGNS[petKind(job)]
+  const pixels = job.status === 'running' && frame % 2 === 1 ? stepping(design.pixels) : [...design.pixels]
+  if (pixels.length % 2 === 1) {
+    pixels.push('.'.repeat(pixels[0]?.length ?? 0))
+  }
+
+  const colourAt = (row: number, column: number): string | null => {
+    const pixel = pixels[row]?.[column] ?? '.'
+    if (pixel === '.') {
+      return null
+    }
+    if (job.status === 'failed') {
+      return 'error'
+    }
+    if (pixel !== '#') {
+      return design.palette[pixel] ?? null
+    }
+
+    return typeof design.body === 'string' ? design.body : (design.body[column % design.body.length] ?? null)
+  }
+
+  const rows: PetRun[][] = []
+  for (let row = 0; row < pixels.length; row += 2) {
+    const runs: PetRun[] = []
+    for (let column = 0; column < (pixels[row]?.length ?? 0); column++) {
+      const top = colourAt(row, column)
+      const bottom = colourAt(row + 1, column)
+      let cell: PetRun
+      if (top && bottom) {
+        cell = top === bottom ? { text: '█', color: top } : { text: '▀', color: top, backgroundColor: bottom }
+      } else if (top) {
+        cell = { text: '▀', color: top }
+      } else if (bottom) {
+        cell = { text: '▄', color: bottom }
+      } else {
+        cell = { text: ' ' }
+      }
+      const last = runs.at(-1)
+      if (last && last.color === cell.color && last.backgroundColor === cell.backgroundColor) {
+        last.text += cell.text
+      } else {
+        runs.push(cell)
+      }
+    }
+    rows.push(runs)
+  }
+
+  return rows
 }
 
 /** The mark after a pet's caption: what state the job is in. */

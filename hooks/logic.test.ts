@@ -5,9 +5,10 @@ import { expect, test } from 'claude-code/testing'
 import {
   ADVICE_MS,
   bandJobs,
-  petColour,
+  petKind,
+  petRows,
+  PET_DESIGNS,
   petMark,
-  petSprite,
   relayFailed,
   relayLabel,
   subagentLabel,
@@ -280,27 +281,11 @@ test('pet captions: skill:lane for relays, type/model for subagents', () => {
   expect(subagentLabel(undefined, undefined)).toBe('general-purpose/inherit')
 })
 
-test('pet colours follow the caption, first match wins', () => {
-  expect(petColour('Explore/haiku')).toBe('green')
-  expect(petColour('codex:research')).toBe('green') // research beats codex
-  expect(petColour('general-purpose/sonnet')).toBe('blue')
-  expect(petColour('Plan/opus')).toBe('magenta')
-  expect(petColour('codex:implement')).toBe('yellow')
-  expect(petColour('agy:run')).toBe('#ff87d7')
-  expect(petColour('claude:run')).toBe('#ff8700')
-})
-
 test('band pets: running jobs always, finished ones only since the last prompt', () => {
   const running = job({ id: 'r' })
   const before = job({ id: 'b', status: 'done', finishedAt: 50 })
   const after = job({ id: 'a', status: 'failed', finishedAt: 150 })
   expect(bandJobs([running, before, after], 100).map(one => one.id)).toEqual(['r', 'a'])
-})
-
-test('pet legs move only while running', () => {
-  expect(petSprite(job({}), 0)).not.toEqual(petSprite(job({}), 1))
-  const done = job({ status: 'done', finishedAt: 1 })
-  expect(petSprite(done, 0)).toEqual(petSprite(done, 1))
 })
 
 test('pet marks: foreground, background, done, failed, stopped', () => {
@@ -320,4 +305,69 @@ test('a relay failure is read from its summary line, as JSON output would have i
   expect(relayFailed(output('relay: completed (exit 0)  ·  codex 0.9'))).toBe(false)
   expect(relayFailed(output('relay: brief file not found'))).toBe(false) // an error message, not a status
   expect(relayFailed('{"status": "failed"}')).toBe(true)
+})
+
+
+// ---- Each model's pet ------------------------------------------------------------------
+
+/** The rows as plain text, colours dropped: what the terminal shows in one colour. */
+const shape = (rows: ReturnType<typeof petRows>) => rows.map(row => row.map(run => run.text).join(''))
+const colours = (rows: ReturnType<typeof petRows>) => new Set(rows.flat().map(run => run.color).filter(Boolean))
+
+test('each model gets its own pet; relays win over the subagent that forwards them', () => {
+  expect(petKind(job({ worker: 'Opus', model: 'claude-opus-5-5', label: 'Plan/opus' }))).toBe('opus')
+  expect(petKind(job({ worker: 'Sonnet', model: 'claude-sonnet-5-5', label: 'general-purpose/sonnet' }))).toBe('sonnet')
+  expect(petKind(job({ worker: 'Haiku', model: 'claude-haiku-5-5', label: 'Explore/haiku' }))).toBe('haiku')
+  expect(petKind(job({ worker: 'Codex', model: 'lane implement', label: 'codex:implement' }))).toBe('codex')
+  expect(petKind(job({ worker: 'Codex (rescue)', model: null, label: 'codex:rescue' }))).toBe('codex')
+  expect(petKind(job({ worker: 'agy', model: null, label: 'agy:research' }))).toBe('agy')
+  expect(petKind(job({ worker: 'Claude CLI', model: null, label: 'claude:run' }))).toBe('claude')
+})
+
+test('every design has rows of one width, so the drawing does not shear', () => {
+  for (const design of Object.values(PET_DESIGNS)) {
+    const width = design.pixels[0]?.length
+    expect(design.pixels.every(row => row.length === width)).toBe(true)
+  }
+})
+
+test('pets: Opus, Sonnet and Codex are three rows, Haiku is smaller', () => {
+  const done = { status: 'done' as const, finishedAt: 1 }
+  expect(petRows(job({ ...done, label: 'Plan/opus', worker: 'Opus' }), 0)).toHaveLength(3)
+  expect(petRows(job({ ...done, label: 'x/sonnet', worker: 'Sonnet' }), 0)).toHaveLength(3)
+  expect(petRows(job({ ...done }), 0)).toHaveLength(3) // codex
+  const haiku = petRows(job({ ...done, label: 'Explore/haiku', worker: 'Haiku' }), 0)
+  expect(haiku).toHaveLength(2)
+  expect(shape(haiku)[0]?.length).toBeLessThan(10)
+})
+
+test('pets: Codex is purple, Haiku pink, agy a rainbow, Opus has its gold monocle', () => {
+  expect(colours(petRows(job({ label: 'codex:implement' }), 0))).toEqual(new Set(['#c678dd']))
+  expect(colours(petRows(job({ label: 'Explore/haiku', worker: 'Haiku' }), 0))).toEqual(new Set(['#ff87d7']))
+  expect(colours(petRows(job({ label: 'agy:run', worker: 'agy' }), 0)).size).toBeGreaterThan(5)
+  expect(colours(petRows(job({ label: 'Plan/opus', worker: 'Opus' }), 0)).has('#e5c07b')).toBe(true)
+})
+
+test('two colours in one cell use the background: the top pixel over the bottom one', () => {
+  // Sonnet's hammer: its grey head sits right over the wooden handle in one cell, drawn
+  // as a grey ▀ on a wooden background. Every run is blocks or blanks, nothing else.
+  const rows = petRows(job({ status: 'done', finishedAt: 1, label: 'x/sonnet', worker: 'Sonnet' }), 0)
+  for (const run of rows.flat()) {
+    expect(run.text).toMatch(/^[ ▀▄█]+$/)
+  }
+  expect(rows.flat()).toContainEqual({ text: '▀', color: '#abb2bf', backgroundColor: '#a0703c' })
+})
+
+test('pets: legs step only while running; only the bottom row moves', () => {
+  const running = job({ label: 'codex:implement' })
+  const [a, b] = [shape(petRows(running, 0)), shape(petRows(running, 1))]
+  expect(a.slice(0, 2)).toEqual(b.slice(0, 2))
+  expect(a[2]).not.toBe(b[2])
+  const done = job({ label: 'codex:implement', status: 'done', finishedAt: 1 })
+  expect(petRows(done, 0)).toEqual(petRows(done, 1))
+})
+
+test('a failed pet is all red', () => {
+  const failed = job({ label: 'agy:run', worker: 'agy', status: 'failed', finishedAt: 1 })
+  expect(colours(petRows(failed, 0))).toEqual(new Set(['error']))
 })

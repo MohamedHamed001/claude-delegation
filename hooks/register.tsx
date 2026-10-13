@@ -31,9 +31,8 @@ import {
   addToDay,
   bandFor,
   bandJobs,
-  petColour,
+  petRows,
   petMark,
-  petSprite,
   relayLabel,
   subagentLabel,
   PET_FRAME_MS,
@@ -918,19 +917,25 @@ export const register: Register = on => {
             <Box key="pets" columnGap={2} flexWrap="wrap">
               {pets.map(pet => {
                 const label = pet.label ?? pet.worker
-                const [body, legs] = petSprite(pet, step)
-                // A failed job's pet is red; a finished one is dimmed in its own colour.
-                const colour = pet.status === 'failed' ? 'error' : petColour(label)
+                // Each model has its own pet; a failed one is red, a finished one dimmed.
                 const dim = pet.status === 'done' || pet.status === 'stopped'
 
                 return (
                   <Box key={`pet:${pet.id}`} flexDirection="column" alignItems="center">
-                    <Text color={colour} dimColor={dim}>
-                      {body}
-                    </Text>
-                    <Text color={colour} dimColor={dim}>
-                      {legs}
-                    </Text>
+                    {petRows(pet, step).map((row, i) => (
+                      <Box key={`pet:${pet.id}:${i}`}>
+                        {row.map((run, j) => (
+                          <Text
+                            key={`pet:${pet.id}:${i}:${j}`}
+                            color={run.color}
+                            backgroundColor={run.backgroundColor}
+                            dimColor={dim}
+                          >
+                            {run.text}
+                          </Text>
+                        ))}
+                      </Box>
+                    ))}
                     <Text key={`caption:${pet.id}`} dimColor={dim}>
                       {label} {petMark(pet)}
                     </Text>
