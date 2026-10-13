@@ -23,13 +23,20 @@
 // The rules (recognising a relay, sizing a task, choosing the band line) are in logic.ts.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { DayTotals, Job } from '../types'
 import {
   EMPTY_DAY,
   addToDay,
   bandFor,
+  bandJobs,
+  petColour,
+  petMark,
+  petSprite,
+  relayLabel,
+  subagentLabel,
+  PET_FRAME_MS,
   costUnits,
   dayOf,
   formatElapsed,
@@ -49,6 +56,7 @@ import {
   parseCompanion,
   platformFromUname,
   parseRelay,
+  relayFailed,
   refusalReason,
   scarceQuestion,
   userAskedToDelegate,
@@ -104,6 +112,36 @@ function smallDelegationRefusal(brief: string, readOnly: boolean): string | null
 const jobs = atom({ plugin: 'delegation', key: 'jobs' } as const, [])
 const today = atom({ plugin: 'delegation', key: 'today' } as const, EMPTY_DAY)
 const now = atom({ plugin: 'delegation', key: 'now' } as const, 0)
+const bandClearedAt = atom({ plugin: 'delegation', key: 'bandClearedAt' } as const, 0)
+const bandHidden = atom({ plugin: 'delegation', key: 'bandHidden' } as const, false)
+const frame = atom({ plugin: 'delegation', key: 'frame' } as const, 0)
+
+// The fast timer that moves the pets' legs. A module variable: a reload loses it, so
+// session.start (which runs again on a reload) restarts it when a job is still running.
+let petTimer: Timer | null = null
+
+/** Note a failure in the debug log (claude --debug). The band never blocks real work. */
+function reportFailure($: EngineInterface, where: string, err: unknown) {
+  $.ui.log(`delegation: ${where} failed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+}
+
+/** Start the pets' animation, unless it already runs. It stops itself when no job runs. */
+function startPetTimer($: EngineInterface) {
+  if (petTimer) {
+    return
+  }
+  petTimer = $.clock.every(PET_FRAME_MS, () => {
+    void (async () => {
+      const list = await read($, jobs)
+      if (!list.some(job => job.status === 'running')) {
+        petTimer?.cancel()
+        petTimer = null
+        return
+      }
+      await update($, frame, n => n + 1)
+    })().catch(err => reportFailure($, 'pet animation', err))
+  })
+}
 
 /** Change one job, found by its id. */
 async function changeJob($: EngineInterface, id: string, change: (job: Job) => Job) {
@@ -123,6 +161,7 @@ async function addToday($: EngineInterface, change: Partial<DayTotals>) {
 /** Record a new job and count it for today. */
 async function startJob($: EngineInterface, job: Job, isRelay: boolean) {
   await update($, jobs, list => [...list, job])
+  startPetTimer($)
   await addToday($, { jobs: 1, relayCalls: isRelay ? 1 : 0 })
   if (job.small) {
     $.ui.toast(SMALL_TASK_ADVICE)
@@ -212,6 +251,7 @@ async function runCompanion(
       worker: call.subcommand === 'task' ? 'Codex' : `Codex ${call.subcommand}`,
       model: call.model,
       title: call.text ? titleFromBrief(call.text) : call.subcommand,
+      label: relayLabel('codex', call.subcommand),
       startedAt: await $.clock.now(),
       finishedAt: null,
       status: 'running',
@@ -527,6 +567,15 @@ export const register: Register = on => {
       })().catch(() => undefined)
     })
 
+    // After a reload the jobs survive but the pet timer does not: restart it if one runs.
+    try {
+      if ((await read($, jobs)).some(job => job.status === 'running')) {
+        startPetTimer($)
+      }
+    } catch (err) {
+      reportFailure($, 'restarting the pet animation', err)
+    }
+
     return next(e)
   })
 
@@ -609,10 +658,18 @@ export const register: Register = on => {
     }
   })
 
-  on('prompt.submit', ($, e, next) => {
+  on('prompt.submit', async ($, e, next) => {
     // Only what the person typed counts as asking; not text a plugin sent for them.
     if (e.origin?.kind === 'composer') {
       lastUserMessage = e.text
+    }
+    // A new prompt: finished pets leave the band (running ones stay), and Hide ends.
+    try {
+      const at = await $.clock.now()
+      await update($, bandClearedAt, () => at)
+      await update($, bandHidden, () => false)
+    } catch (err) {
+      reportFailure($, 'clearing the band', err)
     }
 
     return next(e)
@@ -641,6 +698,7 @@ export const register: Register = on => {
         worker: rescue ? 'Codex (rescue)' : subagentWorker(e.model),
         model: rescue ? (e.prompt.match(/--model\s+(\S+)/)?.[1] ?? null) : (e.model ?? null),
         title: e.description,
+        label: rescue ? 'codex:rescue' : subagentLabel(e.subagent_type, e.model),
         startedAt: await $.clock.now(),
         finishedAt: null,
         status: 'running',
@@ -681,6 +739,10 @@ export const register: Register = on => {
         agentId,
         model: spawned.model ?? job.model,
         worker: job.worker === 'Subagent' ? subagentWorker(spawned.model) : job.worker,
+        // "Explore/inherit" becomes "Explore/opus"; a rescue's "codex:rescue" stays.
+        label: (job.label ?? '').includes('/')
+          ? subagentLabel(job.label.split('/')[0], spawned.model ?? job.model)
+          : job.label,
       })).catch(() => undefined)
     }
 
@@ -732,6 +794,7 @@ export const register: Register = on => {
           worker: relay.worker,
           model: relay.model ?? (relay.lane ? `lane ${relay.lane}` : null),
           title: brief ? titleFromBrief(brief) : 'delegated task',
+          label: relayLabel(relay.skill, relay.lane),
           startedAt: await $.clock.now(),
           finishedAt: null,
           status: 'running',
@@ -754,7 +817,7 @@ export const register: Register = on => {
       if (!background) {
         // The relay ran in the foreground and has finished; its summary is the output.
         const output = JSON.stringify(ran)
-        const failed = /"status"\s*:\s*\\?"(failed|timeout|aborted)/.test(output)
+        const failed = relayFailed(output)
         await finishJob($, e.tool_use_id, failed ? 'failed' : 'done', touchedFiles(output.replace(/\\"/g, '"'))).catch(
           () => undefined,
         )
@@ -827,68 +890,111 @@ export const register: Register = on => {
 
   // ---- Drawing --------------------------------------------------------------------------
 
-  // The band: one line in the shared three-column layout, above what others draw.
+  // The band: a pet for each job, over one line in the shared three-column layout, above
+  // what others draw.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
-    if (e.props.hasSurvey) {
+    if (e.props.hasSurvey || (await read($, bandHidden))) {
       return beneath
     }
     const time = await read($, now)
-    const band = bandFor(await read($, jobs), time)
-    if (band.kind === 'hidden') {
+    const list = await read($, jobs)
+    const band = bandFor(list, time)
+    const pets = bandJobs(list, await read($, bandClearedAt))
+    if (band.kind === 'hidden' && pets.length === 0) {
       return beneath
     }
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const job = band.job
-    const who = `${job.worker}${job.model ? ` (${job.model})` : ''}`
+    const step = await read($, frame)
+    const job = band.kind === 'hidden' ? null : band.job
+    const who = job ? `${job.worker}${job.model ? ` (${job.model})` : ''}` : ''
 
     return (
       <Box flexDirection="column" rowGap={1}>
         {/* Its own filled card, one per plugin, so stacked bands read as separate. */}
-        <Box columnGap={1} alignItems="center" backgroundColor="userMessageBackground" paddingX={1}>
-          <Box width={2}>
-            {band.kind === 'running' && <Text color="warning">⠹</Text>}
-            {band.kind === 'advice' && <Text color="warning">i</Text>}
-            {band.kind === 'long' && <Text color="warning">!</Text>}
-            {band.kind === 'finished' && (
-              <Text color={job.status === 'done' ? 'success' : 'error'}>{job.status === 'done' ? '✓' : '✗'}</Text>
-            )}
-          </Box>
+        <Box flexDirection="column" backgroundColor="userMessageBackground" paddingX={1}>
+          {pets.length > 0 && (
+            <Box key="pets" columnGap={2} flexWrap="wrap">
+              {pets.map(pet => {
+                const label = pet.label ?? pet.worker
+                const [body, legs] = petSprite(pet, step)
+                // A failed job's pet is red; a finished one is dimmed in its own colour.
+                const colour = pet.status === 'failed' ? 'error' : petColour(label)
+                const dim = pet.status === 'done' || pet.status === 'stopped'
 
-          <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-            {band.kind === 'running' && (
-              <Text wrap="truncate-end">
-                {who} · {job.title} · {formatElapsed(time - job.startedAt)}
-                {band.count > 1 ? ` · ${band.count} running` : ''}
-              </Text>
-            )}
-            {band.kind === 'advice' && (
-              <Text color="warning" wrap="truncate-end">
-                {SMALL_TASK_ADVICE}
-              </Text>
-            )}
-            {band.kind === 'long' && (
-              <Text color="warning" wrap="truncate-end">
-                {who} running for {formatElapsed(time - job.startedAt)}. Still working?
-              </Text>
-            )}
-            {band.kind === 'finished' && (
-              <Text wrap="truncate-end">
-                {job.worker} {job.status} in {formatElapsed((job.finishedAt ?? time) - job.startedAt)}
-                {job.filesChanged !== null ? ` · ${job.filesChanged} files changed` : ''} · {job.title}
-              </Text>
-            )}
-          </Box>
-
-          {band.kind !== 'finished' && job.aliveMarker && job.status === 'running' && (
-            <Button key="band-stop" label="Stop" onPress={() => stopJob($, job)} />
+                return (
+                  <Box key={`pet:${pet.id}`} flexDirection="column" alignItems="center">
+                    <Text color={colour} dimColor={dim}>
+                      {body}
+                    </Text>
+                    <Text color={colour} dimColor={dim}>
+                      {legs}
+                    </Text>
+                    <Text key={`caption:${pet.id}`} dimColor={dim}>
+                      {label} {petMark(pet)}
+                    </Text>
+                  </Box>
+                )
+              })}
+            </Box>
           )}
-          <Button
-            key="open-delegations"
-            label="Delegations"
-            onPress={() => $.ui.open({ id: PANE, title: 'Delegations' })}
-          />
+
+          <Box columnGap={1} alignItems="center">
+            {band.kind !== 'hidden' && job && (
+              <Box flexGrow={1} flexShrink={1} minWidth={0} columnGap={1} alignItems="center">
+                <Box width={2}>
+                  {band.kind === 'running' && <Text color="warning">⠹</Text>}
+                  {band.kind === 'advice' && <Text color="warning">i</Text>}
+                  {band.kind === 'long' && <Text color="warning">!</Text>}
+                  {band.kind === 'finished' && (
+                    <Text color={job.status === 'done' ? 'success' : 'error'}>{job.status === 'done' ? '✓' : '✗'}</Text>
+                  )}
+                </Box>
+
+                <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                  {band.kind === 'running' && (
+                    <Text wrap="truncate-end">
+                      {who} · {job.title} · {formatElapsed(time - job.startedAt)}
+                      {band.count > 1 ? ` · ${band.count} running` : ''}
+                    </Text>
+                  )}
+                  {band.kind === 'advice' && (
+                    <Text color="warning" wrap="truncate-end">
+                      {SMALL_TASK_ADVICE}
+                    </Text>
+                  )}
+                  {band.kind === 'long' && (
+                    <Text color="warning" wrap="truncate-end">
+                      {who} running for {formatElapsed(time - job.startedAt)}. Still working?
+                    </Text>
+                  )}
+                  {band.kind === 'finished' && (
+                    <Text wrap="truncate-end">
+                      {job.worker} {job.status} in {formatElapsed((job.finishedAt ?? time) - job.startedAt)}
+                      {job.filesChanged !== null ? ` · ${job.filesChanged} files changed` : ''} · {job.title}
+                    </Text>
+                  )}
+                </Box>
+              </Box>
+            )}
+            {band.kind === 'hidden' && <Box flexGrow={1} />}
+
+            {band.kind !== 'finished' && job && job.aliveMarker && job.status === 'running' && (
+              <Button key="band-stop" label="Stop" onPress={() => stopJob($, job)} />
+            )}
+            <Button
+              key="open-delegations"
+              label="Delegations"
+              onPress={() => $.ui.open({ id: PANE, title: 'Delegations' })}
+            />
+            {/* Out of the way until the next prompt; the pane still has everything. */}
+            <Button
+              key="band-hide"
+              label="Hide"
+              onPress={() => update($, bandHidden, () => true).catch(err => reportFailure($, 'hiding the band', err))}
+            />
+          </Box>
         </Box>
         {beneath}
       </Box>

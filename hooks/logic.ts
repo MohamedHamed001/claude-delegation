@@ -37,6 +37,8 @@ export function costUnits(usage: Usage): number {
 /** A relay command that hands work to another tool, as found in a shell command. */
 export type RelayCall = {
   worker: string
+  /** The skill's short name: "codex" for codex-delegate/scripts/relay.mjs. */
+  skill: string
   briefPath: string
   model: string | null
   lane: string | null
@@ -83,10 +85,23 @@ export function parseRelay(fullCommand: string): RelayCall | null {
 
   return {
     worker: RELAY_WORKERS[relay[1]] ?? relay[1],
+    skill: (relay[1] ?? '').replace(/-delegate$/, ''),
     briefPath,
     model: flag(command, 'model'),
     lane: flag(command, 'lane'),
   }
+}
+
+/**
+ * Whether a foreground relay's output says it failed. Every relay ends with a summary line,
+ * "relay: failed (exit 1)  ·  codex 0.9"; a JSON result's "status": "failed" counts too.
+ * Failed, timed out, aborted, or the worker's CLI was not there ("codex_unavailable").
+ */
+export function relayFailed(output: string): boolean {
+  return (
+    /relay: (?:failed|timeout|aborted|\w+_unavailable) \(exit/.test(output) ||
+    /"status"\s*:\s*\\?"(?:failed|timeout|aborted|\w+_unavailable)/.test(output)
+  )
 }
 
 /** The worker name for a Claude subagent, from the model it was asked to use. */
@@ -218,6 +233,83 @@ export function bandFor(jobs: readonly Job[], now: number): Band {
     .at(-1)
 
   return finished ? { kind: 'finished', job: finished } : { kind: 'hidden' }
+}
+
+// ---------------------------------------------------------------------------
+// The pets: one small sprite per job in the band, with a caption.
+// ---------------------------------------------------------------------------
+
+/** How often the pets' legs move while a job runs. */
+export const PET_FRAME_MS = 100
+
+/** The caption for a relay job: "codex:implement", or "codex:run" without a lane. */
+export function relayLabel(skill: string, lane: string | null): string {
+  return `${skill}:${lane ?? 'run'}`
+}
+
+/**
+ * The caption for a subagent: "Explore/haiku". The model is the family only; a subagent
+ * that inherits the main model shows "inherit" until its spawn event names the model.
+ */
+export function subagentLabel(subagentType: string | undefined, model: string | null | undefined): string {
+  const family = model ? model.replace(/^claude-/, '').split('-')[0] : 'inherit'
+
+  return `${subagentType ?? 'general-purpose'}/${family}`
+}
+
+/**
+ * The pet's colour, from words in its caption, checked in this order (the first match
+ * wins, so "codex:research" is green): fast reading, then building, then thinking,
+ * then the relay's own colour, then orange for anything else.
+ */
+export function petColour(label: string): string {
+  const text = label.toLowerCase()
+  if (/haiku|explore|research/.test(text)) {
+    return 'green'
+  }
+  if (/sonnet|feature/.test(text)) {
+    return 'blue'
+  }
+  if (/opus|second-opinion|plan/.test(text)) {
+    return 'magenta'
+  }
+  if (/codex/.test(text)) {
+    return 'yellow'
+  }
+  if (/agy/.test(text)) {
+    return '#ff87d7' // pink
+  }
+
+  return '#ff8700' // orange
+}
+
+/**
+ * The jobs that get a pet: every running job, and each job that finished since the
+ * user's last prompt. Older finished jobs stay in the pane, just not in the band.
+ */
+export function bandJobs(jobs: readonly Job[], clearedAt: number): Job[] {
+  return jobs.filter(
+    job => job.status === 'running' || (job.finishedAt !== null && job.finishedAt >= clearedAt),
+  )
+}
+
+/**
+ * The pet's two rows: a body over legs. A running job's legs swap every frame; a
+ * finished one stands still.
+ */
+export function petSprite(job: Job, frame: number): [string, string] {
+  const walking = job.status === 'running' && frame % 2 === 1
+
+  return ['▄█▄', walking ? '▝ ▘' : '▘ ▝']
+}
+
+/** The mark after a pet's caption: what state the job is in. */
+export function petMark(job: Job): string {
+  if (job.status === 'running') {
+    return job.background ? '◌' : '…'
+  }
+
+  return { done: '✓', failed: '✗', stopped: '■' }[job.status]
 }
 
 // ---------------------------------------------------------------------------
