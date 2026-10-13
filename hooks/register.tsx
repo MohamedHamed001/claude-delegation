@@ -56,6 +56,7 @@ import {
   parseCompanion,
   platformFromUname,
   parseRelay,
+  relayFailed,
   refusalReason,
   scarceQuestion,
   userAskedToDelegate,
@@ -816,7 +817,7 @@ export const register: Register = on => {
       if (!background) {
         // The relay ran in the foreground and has finished; its summary is the output.
         const output = JSON.stringify(ran)
-        const failed = /"status"\s*:\s*\\?"(failed|timeout|aborted)/.test(output)
+        const failed = relayFailed(output)
         await finishJob($, e.tool_use_id, failed ? 'failed' : 'done', touchedFiles(output.replace(/\\"/g, '"'))).catch(
           () => undefined,
         )

@@ -92,6 +92,18 @@ export function parseRelay(fullCommand: string): RelayCall | null {
   }
 }
 
+/**
+ * Whether a foreground relay's output says it failed. Every relay ends with a summary line,
+ * "relay: failed (exit 1)  ·  codex 0.9"; a JSON result's "status": "failed" counts too.
+ * Failed, timed out, aborted, or the worker's CLI was not there ("codex_unavailable").
+ */
+export function relayFailed(output: string): boolean {
+  return (
+    /relay: (?:failed|timeout|aborted|\w+_unavailable) \(exit/.test(output) ||
+    /"status"\s*:\s*\\?"(?:failed|timeout|aborted|\w+_unavailable)/.test(output)
+  )
+}
+
 /** The worker name for a Claude subagent, from the model it was asked to use. */
 export function subagentWorker(model: string | undefined): string {
   if (!model) {

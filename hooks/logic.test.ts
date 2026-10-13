@@ -8,6 +8,7 @@ import {
   petColour,
   petMark,
   petSprite,
+  relayFailed,
   relayLabel,
   subagentLabel,
   FINISHED_SHOWN_MS,
@@ -308,4 +309,15 @@ test('pet marks: foreground, background, done, failed, stopped', () => {
   expect(petMark(job({ status: 'done' }))).toBe('✓')
   expect(petMark(job({ status: 'failed' }))).toBe('✗')
   expect(petMark(job({ status: 'stopped' }))).toBe('■')
+})
+
+test('a relay failure is read from its summary line, as JSON output would have it', () => {
+  const output = (line: string) => JSON.stringify({ result: { stdout: `codex says hi\n${line}\ntouched files: 0` } })
+  expect(relayFailed(output('relay: failed (exit 1)  ·  codex 0.9'))).toBe(true)
+  expect(relayFailed(output('relay: timeout (exit 124)  ·  codex 0.9'))).toBe(true)
+  expect(relayFailed(output('relay: aborted (exit 130)  ·  agy 1.2'))).toBe(true)
+  expect(relayFailed(output('relay: codex_unavailable (exit 127)  ·  codex ?'))).toBe(true)
+  expect(relayFailed(output('relay: completed (exit 0)  ·  codex 0.9'))).toBe(false)
+  expect(relayFailed(output('relay: brief file not found'))).toBe(false) // an error message, not a status
+  expect(relayFailed('{"status": "failed"}')).toBe(true)
 })
