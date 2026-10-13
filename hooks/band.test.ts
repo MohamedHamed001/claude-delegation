@@ -87,7 +87,7 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  test(`a running pet's legs move as time passes (${surface})`, async ($, on) => {
+  test(`a running pet moves as time passes (${surface})`, async ($, on) => {
     const clock = engineBeneath(on)
     on('tool.call', () => ({ result: { text: 'started' } }) as never)
 
@@ -96,8 +96,8 @@ for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'delegation', surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: 'Plan/opus ◌' })).toBeDefined()
     const before = JSON.stringify(await ui.drawn())
-    await clock.advance(100)
-    expect(JSON.stringify(await ui.drawn())).not.toBe(before) // the legs stepped
+    await clock.advance(300)
+    expect(JSON.stringify(await ui.drawn())).not.toBe(before) // it walked or worked
     await ui.unmount()
   })
 

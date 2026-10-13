@@ -288,48 +288,136 @@ export function bandJobs(jobs: readonly Job[], clearedAt: number): Job[] {
 /**
  * One pet design, as square pixels: '#' is the body, '.' is empty (the eyes are empty
  * pixels), any other letter takes its colour from the palette. The body is one colour,
- * or a list of colours, one per column (agy's rainbow).
+ * or a list of colours, one per column (agy's rainbow). `work` is the animation the pet
+ * plays while it works, one pixel grid per step, each as wide as `pixels`.
  */
 type PetDesign = {
   pixels: readonly string[]
   body: string | readonly string[]
   palette: Readonly<Record<string, string>>
+  work: readonly (readonly string[])[]
 }
 
-const CLAWD = ['.########.', '.#.####.#.', '##.####.##', '##########', '.#.#..#.#.', '.#.#..#.#.']
+const LEGS = '.#.#..#.#.'
+const CLAWD = ['.########.', '.#.####.#.', '##.####.##', '##########', LEGS, LEGS]
 
-/** Clawd, and how each model dresses it up. */
+/** Clawd, how each model dresses it up, and the job it acts out. */
 export const PET_DESIGNS: Readonly<Record<PetKind, PetDesign>> = {
-  // A gold monocle around the right eye, its chain hanging down.
+  // A gold monocle around the right eye, its chain hanging down. Works: the lens glints.
   opus: {
-    pixels: ['.#####ggg.', '.#.###g.g.', '##.###g.g#', '######ggg#', '.#.#..#.#g', '.#.#..#.#.'],
+    pixels: ['.#####ggg.', '.#.###g.g.', '##.###g.g#', '######ggg#', '.#.#..#.#g', LEGS],
     body: '#d97757',
-    palette: { g: '#e5c07b' },
+    palette: { g: '#e5c07b', w: '#ffffff' },
+    work: [
+      ['.#####ggg.', '.#.###g.g.', '##.###g.g#', '######ggg#', '.#.#..#.#g', LEGS],
+      ['.#####ggg.', '.#.###gwg.', '##.###g.g#', '######ggg#', '.#.#..#.#g', LEGS],
+    ],
   },
-  // Holding a hammer: grey head, wooden handle.
+  // Holding a hammer: grey head, wooden handle. Works: swings it down and back up.
   sonnet: {
     pixels: ['.########.HHH', '.#.####.#..h.', '##.####.##.h.', '###########h.', '.#.#..#.#..h.', '.#.#..#.#....'],
     body: '#61afef',
     palette: { H: '#abb2bf', h: '#a0703c' },
+    work: [
+      ['.########.HHH', '.#.####.#..h.', '##.####.##.h.', '###########h.', '.#.#..#.#..h.', '.#.#..#.#....'],
+      ['.########....', '.#.####.#...H', '##.####.##hhH', '##########..H', '.#.#..#.#....', '.#.#..#.#....'],
+    ],
   },
-  // Smaller: two rows instead of three.
+  // Smaller: two rows instead of three. Works: waves its arms.
   haiku: {
     pixels: ['.######.', '##.##.##', '.######.', '.#.##.#.'],
     body: '#ff87d7',
     palette: {},
+    work: [
+      ['.######.', '##.##.##', '.######.', '.#.##.#.'],
+      ['########', '.#.##.#.', '.######.', '.#.##.#.'],
+    ],
   },
-  // Winking: the left eye a closed slit.
+  // Winking: the left eye a closed slit. Works: types, one arm up, then the other.
   codex: {
-    pixels: ['.########.', '.######.#.', '##..###.##', '##########', '.#.#..#.#.', '.#.#..#.#.'],
+    pixels: ['.########.', '.######.#.', '##..###.##', '##########', LEGS, LEGS],
     body: '#c678dd',
     palette: {},
+    work: [
+      ['.########.', '.######.#.', '##..###.##', '##########', LEGS, LEGS],
+      ['.########.', '#######.#.', '##..###.##', '.#########', LEGS, LEGS],
+      ['.########.', '.######.#.', '##..###.##', '##########', LEGS, LEGS],
+      ['.########.', '.######.##', '##..###.##', '#########.', LEGS, LEGS],
+    ],
   },
+  // A rainbow body. Works: the colours slide along it (see petRows).
   agy: {
     pixels: CLAWD,
     body: ['#e06c75', '#e5a54b', '#e5c07b', '#98c379', '#56b6c2', '#61afef', '#7a7fe8', '#c678dd', '#e06c9f', '#e06c75'],
     palette: {},
+    work: [CLAWD],
   },
-  claude: { pixels: CLAWD, body: '#d97757', palette: {} },
+  // Plain Clawd. Works: looks left, then right.
+  claude: {
+    pixels: CLAWD,
+    body: '#d97757',
+    palette: {},
+    work: [
+      CLAWD,
+      ['.########.', '.#.###.##.', '##.###.###', '##########', LEGS, LEGS],
+      CLAWD,
+      ['.########.', '.##.###.#.', '###.###.##', '##########', LEGS, LEGS],
+    ],
+  },
+}
+
+/** How many cells a running pet walks across, and how long each part of its loop takes. */
+export const PET_TRACK = 6
+/** Frames (of PET_FRAME_MS) per cell walked: one cell every 200 ms. */
+const WALK_FRAMES = 2
+/** Frames spent working at each end of the track: two seconds. */
+const WORK_FRAMES = 20
+/** Frames per step of the work animation. */
+const WORK_STEP_FRAMES = 3
+/** One loop: walk right, work, walk left, work. */
+export const PET_LOOP_FRAMES = 2 * (PET_TRACK * WALK_FRAMES + WORK_FRAMES)
+
+/**
+ * Where a pet is and what it is doing. `offset` is its distance from the left end of the
+ * track, in cells; `step` counts its leg steps while walking, its work steps while working.
+ */
+export type PetPose = { offset: number; walking: boolean; working: boolean; step: number }
+
+/** A number from the job's id, so pets that start together do not move in lockstep. */
+function loopStart(id: string): number {
+  let sum = 0
+  for (const char of id) {
+    sum = (sum * 31 + char.charCodeAt(0)) % PET_LOOP_FRAMES
+  }
+
+  return sum
+}
+
+/**
+ * The pet's pose at a frame. A running pet loops: walk right, work, walk left, work.
+ * Any other pet stands still in the middle of the track.
+ */
+export function petPose(job: Job, frame: number): PetPose {
+  if (job.status !== 'running') {
+    return { offset: PET_TRACK / 2, walking: false, working: false, step: 0 }
+  }
+  const walk = PET_TRACK * WALK_FRAMES
+  let t = (frame + loopStart(job.id)) % PET_LOOP_FRAMES
+  if (t < walk) {
+    return { offset: Math.floor(t / WALK_FRAMES), walking: true, working: false, step: Math.floor(t / WALK_FRAMES) }
+  }
+  t -= walk
+  if (t < WORK_FRAMES) {
+    return { offset: PET_TRACK, walking: false, working: true, step: Math.floor(t / WORK_STEP_FRAMES) }
+  }
+  t -= WORK_FRAMES
+  if (t < walk) {
+    const cells = Math.floor(t / WALK_FRAMES)
+    return { offset: PET_TRACK - cells, walking: true, working: false, step: cells }
+  }
+  t -= walk
+
+  return { offset: 0, walking: false, working: true, step: Math.floor(t / WORK_STEP_FRAMES) }
 }
 
 /** A run of cells drawn in one Text: same colour, same background. */
@@ -346,19 +434,39 @@ function stepping(pixels: readonly string[]): string[] {
   return rows
 }
 
+/** Add a run to a row, joining it to the last one when their colours match. */
+function addRun(runs: PetRun[], run: PetRun) {
+  const last = runs.at(-1)
+  if (last && last.color === run.color && last.backgroundColor === run.backgroundColor) {
+    last.text += run.text
+  } else {
+    runs.push({ ...run })
+  }
+}
+
 /**
- * The pet's text rows, ready to draw. Each text cell holds two pixels, one above the other:
- * ▀ the top, ▄ the bottom, █ both; when both are filled in different colours the cell is
- * ▀ in the top colour on a background of the bottom colour. Cells next to each other with
- * the same colours are joined into one run. A failed job's pet is all red; a running
- * one steps on odd frames.
+ * The pet's text rows at a frame, ready to draw, as wide as the pet plus its track.
+ * Each text cell holds two pixels, one above the other: ▀ the top, ▄ the bottom, █ both;
+ * when both are filled in different colours the cell is ▀ in the top colour on a
+ * background of the bottom colour. Cells next to each other with the same colours are
+ * joined into one run. A failed job's pet is all red.
  */
 export function petRows(job: Job, frame: number): PetRun[][] {
   const design = PET_DESIGNS[petKind(job)]
-  const pixels = job.status === 'running' && frame % 2 === 1 ? stepping(design.pixels) : [...design.pixels]
+  const pose = petPose(job, frame)
+  let pixels: string[]
+  if (pose.walking) {
+    pixels = pose.step % 2 === 1 ? stepping(design.pixels) : [...design.pixels]
+  } else if (pose.working) {
+    pixels = [...(design.work[pose.step % design.work.length] ?? design.pixels)]
+  } else {
+    pixels = [...design.pixels]
+  }
   if (pixels.length % 2 === 1) {
     pixels.push('.'.repeat(pixels[0]?.length ?? 0))
   }
+  // agy's rainbow slides one column per work step.
+  const slide = pose.working ? pose.step : 0
 
   const colourAt = (row: number, column: number): string | null => {
     const pixel = pixels[row]?.[column] ?? '.'
@@ -371,32 +479,34 @@ export function petRows(job: Job, frame: number): PetRun[][] {
     if (pixel !== '#') {
       return design.palette[pixel] ?? null
     }
+    if (typeof design.body === 'string') {
+      return design.body
+    }
 
-    return typeof design.body === 'string' ? design.body : (design.body[column % design.body.length] ?? null)
+    return design.body[(column + slide) % design.body.length] ?? null
   }
 
   const rows: PetRun[][] = []
   for (let row = 0; row < pixels.length; row += 2) {
     const runs: PetRun[] = []
+    if (pose.offset > 0) {
+      addRun(runs, { text: ' '.repeat(pose.offset) })
+    }
     for (let column = 0; column < (pixels[row]?.length ?? 0); column++) {
       const top = colourAt(row, column)
       const bottom = colourAt(row + 1, column)
-      let cell: PetRun
       if (top && bottom) {
-        cell = top === bottom ? { text: '█', color: top } : { text: '▀', color: top, backgroundColor: bottom }
+        addRun(runs, top === bottom ? { text: '█', color: top } : { text: '▀', color: top, backgroundColor: bottom })
       } else if (top) {
-        cell = { text: '▀', color: top }
+        addRun(runs, { text: '▀', color: top })
       } else if (bottom) {
-        cell = { text: '▄', color: bottom }
+        addRun(runs, { text: '▄', color: bottom })
       } else {
-        cell = { text: ' ' }
+        addRun(runs, { text: ' ' })
       }
-      const last = runs.at(-1)
-      if (last && last.color === cell.color && last.backgroundColor === cell.backgroundColor) {
-        last.text += cell.text
-      } else {
-        runs.push(cell)
-      }
+    }
+    if (pose.offset < PET_TRACK) {
+      addRun(runs, { text: ' '.repeat(PET_TRACK - pose.offset) })
     }
     rows.push(runs)
   }
