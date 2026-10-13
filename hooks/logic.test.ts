@@ -4,6 +4,12 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   ADVICE_MS,
+  bandJobs,
+  petColour,
+  petMark,
+  petSprite,
+  relayLabel,
+  subagentLabel,
   FINISHED_SHOWN_MS,
   LONG_RUNNING_MS,
   addToDay,
@@ -42,7 +48,7 @@ test('a Codex relay call is recognised, with its brief, lane and model', () => {
   const call = parseRelay(
     'node ~/.claude/skills/codex-delegate/scripts/relay.mjs --brief "C:/tmp/brief.txt" --cd "D:/x" --lane implement --model gpt-6-luna --timeout 9m',
   )
-  expect(call).toEqual({ worker: 'Codex', briefPath: 'C:/tmp/brief.txt', model: 'gpt-6-luna', lane: 'implement' })
+  expect(call).toEqual({ worker: 'Codex', skill: 'codex', briefPath: 'C:/tmp/brief.txt', model: 'gpt-6-luna', lane: 'implement' })
 })
 
 test('other relays get their own worker name', () => {
@@ -92,7 +98,7 @@ test('day totals add up', () => {
 })
 
 const job = (change: Partial<Job>): Job => ({
-  id: 'j', worker: 'Codex', model: 'gpt-6-luna', title: 'task', startedAt: 0, finishedAt: null,
+  id: 'j', worker: 'Codex', model: 'gpt-6-luna', title: 'task', label: 'codex:implement', startedAt: 0, finishedAt: null,
   status: 'running', background: true, small: false, aliveMarker: 'b.txt', agentId: null,
   opusRequests: 0, opusUnits: 0, workerUnits: 0, filesChanged: null, isTracking: true, ...change,
 })
@@ -262,4 +268,44 @@ test('a relay or companion named inside a heredoc is file text, not a run', () =
   expect(parseRelay('cat > notes.md <<EOF\nnode a/codex-delegate/scripts/relay.mjs --brief b.txt\nEOF')).toBe(null)
   // A real call before a heredoc still counts.
   expect(parseCompanion(`${companion} review --wait <<'EOF'\nstdin\nEOF`)?.subcommand).toBe('review')
+})
+
+// ---- The pets ----------------------------------------------------------------------
+
+test('pet captions: skill:lane for relays, type/model for subagents', () => {
+  expect(relayLabel('codex', 'implement')).toBe('codex:implement')
+  expect(relayLabel('agy', null)).toBe('agy:run')
+  expect(subagentLabel('Explore', 'claude-haiku-5-5')).toBe('Explore/haiku')
+  expect(subagentLabel(undefined, undefined)).toBe('general-purpose/inherit')
+})
+
+test('pet colours follow the caption, first match wins', () => {
+  expect(petColour('Explore/haiku')).toBe('green')
+  expect(petColour('codex:research')).toBe('green') // research beats codex
+  expect(petColour('general-purpose/sonnet')).toBe('blue')
+  expect(petColour('Plan/opus')).toBe('magenta')
+  expect(petColour('codex:implement')).toBe('yellow')
+  expect(petColour('agy:run')).toBe('#ff87d7')
+  expect(petColour('claude:run')).toBe('#ff8700')
+})
+
+test('band pets: running jobs always, finished ones only since the last prompt', () => {
+  const running = job({ id: 'r' })
+  const before = job({ id: 'b', status: 'done', finishedAt: 50 })
+  const after = job({ id: 'a', status: 'failed', finishedAt: 150 })
+  expect(bandJobs([running, before, after], 100).map(one => one.id)).toEqual(['r', 'a'])
+})
+
+test('pet legs move only while running', () => {
+  expect(petSprite(job({}), 0)).not.toEqual(petSprite(job({}), 1))
+  const done = job({ status: 'done', finishedAt: 1 })
+  expect(petSprite(done, 0)).toEqual(petSprite(done, 1))
+})
+
+test('pet marks: foreground, background, done, failed, stopped', () => {
+  expect(petMark(job({ background: false }))).toBe('…')
+  expect(petMark(job({ background: true }))).toBe('◌')
+  expect(petMark(job({ status: 'done' }))).toBe('✓')
+  expect(petMark(job({ status: 'failed' }))).toBe('✗')
+  expect(petMark(job({ status: 'stopped' }))).toBe('■')
 })

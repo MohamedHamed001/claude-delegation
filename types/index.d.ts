@@ -10,6 +10,11 @@ export type Job = {
   model: string | null
   /** A short name for the task, from the delegation's description or brief. */
   title: string
+  /**
+   * The caption under the job's pet in the band: "skill:lane" for a relay ("codex:implement"),
+   * "type/model" for a subagent ("Explore/haiku"). Also picks the pet's colour.
+   */
+  label: string
   startedAt: number
   finishedAt: number | null
   status: 'running' | 'done' | 'failed' | 'stopped'
@@ -54,6 +59,12 @@ declare module 'claude-code' {
       today: DayTotals
       /** The current time, refreshed on a timer so elapsed times redraw. */
       now: number
+      /** When the user last sent a prompt: the band shows no job that finished before it. */
+      bandClearedAt: number
+      /** True after the band's Hide button, until the next prompt. */
+      bandHidden: boolean
+      /** The pets' animation frame, counted up on a fast timer while a job runs. */
+      frame: number
     }
   }
 }

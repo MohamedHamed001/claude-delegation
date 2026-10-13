@@ -23,13 +23,20 @@
 // The rules (recognising a relay, sizing a task, choosing the band line) are in logic.ts.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { DayTotals, Job } from '../types'
 import {
   EMPTY_DAY,
   addToDay,
   bandFor,
+  bandJobs,
+  petColour,
+  petMark,
+  petSprite,
+  relayLabel,
+  subagentLabel,
+  PET_FRAME_MS,
   costUnits,
   dayOf,
   formatElapsed,
@@ -104,6 +111,36 @@ function smallDelegationRefusal(brief: string, readOnly: boolean): string | null
 const jobs = atom({ plugin: 'delegation', key: 'jobs' } as const, [])
 const today = atom({ plugin: 'delegation', key: 'today' } as const, EMPTY_DAY)
 const now = atom({ plugin: 'delegation', key: 'now' } as const, 0)
+const bandClearedAt = atom({ plugin: 'delegation', key: 'bandClearedAt' } as const, 0)
+const bandHidden = atom({ plugin: 'delegation', key: 'bandHidden' } as const, false)
+const frame = atom({ plugin: 'delegation', key: 'frame' } as const, 0)
+
+// The fast timer that moves the pets' legs. A module variable: a reload loses it, so
+// session.start (which runs again on a reload) restarts it when a job is still running.
+let petTimer: Timer | null = null
+
+/** Note a failure in the debug log (claude --debug). The band never blocks real work. */
+function reportFailure($: EngineInterface, where: string, err: unknown) {
+  $.ui.log(`delegation: ${where} failed: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+}
+
+/** Start the pets' animation, unless it already runs. It stops itself when no job runs. */
+function startPetTimer($: EngineInterface) {
+  if (petTimer) {
+    return
+  }
+  petTimer = $.clock.every(PET_FRAME_MS, () => {
+    void (async () => {
+      const list = await read($, jobs)
+      if (!list.some(job => job.status === 'running')) {
+        petTimer?.cancel()
+        petTimer = null
+        return
+      }
+      await update($, frame, n => n + 1)
+    })().catch(err => reportFailure($, 'pet animation', err))
+  })
+}
 
 /** Change one job, found by its id. */
 async function changeJob($: EngineInterface, id: string, change: (job: Job) => Job) {
@@ -123,6 +160,7 @@ async function addToday($: EngineInterface, change: Partial<DayTotals>) {
 /** Record a new job and count it for today. */
 async function startJob($: EngineInterface, job: Job, isRelay: boolean) {
   await update($, jobs, list => [...list, job])
+  startPetTimer($)
   await addToday($, { jobs: 1, relayCalls: isRelay ? 1 : 0 })
   if (job.small) {
     $.ui.toast(SMALL_TASK_ADVICE)
@@ -212,6 +250,7 @@ async function runCompanion(
       worker: call.subcommand === 'task' ? 'Codex' : `Codex ${call.subcommand}`,
       model: call.model,
       title: call.text ? titleFromBrief(call.text) : call.subcommand,
+      label: relayLabel('codex', call.subcommand),
       startedAt: await $.clock.now(),
       finishedAt: null,
       status: 'running',
@@ -527,6 +566,15 @@ export const register: Register = on => {
       })().catch(() => undefined)
     })
 
+    // After a reload the jobs survive but the pet timer does not: restart it if one runs.
+    try {
+      if ((await read($, jobs)).some(job => job.status === 'running')) {
+        startPetTimer($)
+      }
+    } catch (err) {
+      reportFailure($, 'restarting the pet animation', err)
+    }
+
     return next(e)
   })
 
@@ -609,10 +657,18 @@ export const register: Register = on => {
     }
   })
 
-  on('prompt.submit', ($, e, next) => {
+  on('prompt.submit', async ($, e, next) => {
     // Only what the person typed counts as asking; not text a plugin sent for them.
     if (e.origin?.kind === 'composer') {
       lastUserMessage = e.text
+    }
+    // A new prompt: finished pets leave the band (running ones stay), and Hide ends.
+    try {
+      const at = await $.clock.now()
+      await update($, bandClearedAt, () => at)
+      await update($, bandHidden, () => false)
+    } catch (err) {
+      reportFailure($, 'clearing the band', err)
     }
 
     return next(e)
@@ -641,6 +697,7 @@ export const register: Register = on => {
         worker: rescue ? 'Codex (rescue)' : subagentWorker(e.model),
         model: rescue ? (e.prompt.match(/--model\s+(\S+)/)?.[1] ?? null) : (e.model ?? null),
         title: e.description,
+        label: rescue ? 'codex:rescue' : subagentLabel(e.subagent_type, e.model),
         startedAt: await $.clock.now(),
         finishedAt: null,
         status: 'running',
@@ -681,6 +738,10 @@ export const register: Register = on => {
         agentId,
         model: spawned.model ?? job.model,
         worker: job.worker === 'Subagent' ? subagentWorker(spawned.model) : job.worker,
+        // "Explore/inherit" becomes "Explore/opus"; a rescue's "codex:rescue" stays.
+        label: (job.label ?? '').includes('/')
+          ? subagentLabel(job.label.split('/')[0], spawned.model ?? job.model)
+          : job.label,
       })).catch(() => undefined)
     }
 
@@ -732,6 +793,7 @@ export const register: Register = on => {
           worker: relay.worker,
           model: relay.model ?? (relay.lane ? `lane ${relay.lane}` : null),
           title: brief ? titleFromBrief(brief) : 'delegated task',
+          label: relayLabel(relay.skill, relay.lane),
           startedAt: await $.clock.now(),
           finishedAt: null,
           status: 'running',
