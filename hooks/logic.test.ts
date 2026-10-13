@@ -8,6 +8,9 @@ import {
   petKind,
   petRows,
   PET_DESIGNS,
+  PET_LOOP_FRAMES,
+  PET_TRACK,
+  petPose,
   petMark,
   relayFailed,
   relayLabel,
@@ -327,7 +330,10 @@ test('each model gets its own pet; relays win over the subagent that forwards th
 test('every design has rows of one width, so the drawing does not shear', () => {
   for (const design of Object.values(PET_DESIGNS)) {
     const width = design.pixels[0]?.length
-    expect(design.pixels.every(row => row.length === width)).toBe(true)
+    for (const pixels of [design.pixels, ...design.work]) {
+      expect(pixels).toHaveLength(design.pixels.length)
+      expect(pixels.every(row => row.length === width)).toBe(true)
+    }
   }
 })
 
@@ -338,7 +344,8 @@ test('pets: Opus, Sonnet and Codex are three rows, Haiku is smaller', () => {
   expect(petRows(job({ ...done }), 0)).toHaveLength(3) // codex
   const haiku = petRows(job({ ...done, label: 'Explore/haiku', worker: 'Haiku' }), 0)
   expect(haiku).toHaveLength(2)
-  expect(shape(haiku)[0]?.length).toBeLessThan(10)
+  const clawd = petRows(job({ ...done }), 0)
+  expect(shape(haiku)[0]?.length).toBeLessThan(shape(clawd)[0]?.length ?? 0) // narrower too
 })
 
 test('pets: Codex is purple, Haiku pink, agy a rainbow, Opus has its gold monocle', () => {
@@ -358,16 +365,80 @@ test('two colours in one cell use the background: the top pixel over the bottom 
   expect(rows.flat()).toContainEqual({ text: '▀', color: '#abb2bf', backgroundColor: '#a0703c' })
 })
 
-test('pets: legs step only while running; only the bottom row moves', () => {
-  const running = job({ label: 'codex:implement' })
-  const [a, b] = [shape(petRows(running, 0)), shape(petRows(running, 1))]
-  expect(a.slice(0, 2)).toEqual(b.slice(0, 2))
-  expect(a[2]).not.toBe(b[2])
-  const done = job({ label: 'codex:implement', status: 'done', finishedAt: 1 })
-  expect(petRows(done, 0)).toEqual(petRows(done, 1))
-})
-
 test('a failed pet is all red', () => {
   const failed = job({ label: 'agy:run', worker: 'agy', status: 'failed', finishedAt: 1 })
   expect(colours(petRows(failed, 0))).toEqual(new Set(['error']))
+})
+
+// ---- Walking and working -------------------------------------------------------------
+
+const loop = (one: Job) => Array.from({ length: PET_LOOP_FRAMES }, (_, frame) => petPose(one, frame))
+
+test('a running pet walks the whole track both ways and works at each end', () => {
+  const poses = loop(job({ label: 'codex:implement' }))
+  const offsets = new Set(poses.map(pose => pose.offset))
+  for (let cell = 0; cell <= PET_TRACK; cell++) {
+    expect(offsets.has(cell)).toBe(true)
+  }
+  expect(poses.filter(pose => pose.working).map(pose => pose.offset).sort()).toContain(0)
+  expect(poses.filter(pose => pose.working).map(pose => pose.offset)).toContain(PET_TRACK)
+  // It never jumps: from one frame to the next it moves at most one cell, the loop's end included.
+  poses.forEach((pose, i) => {
+    const next = poses[(i + 1) % poses.length]!
+    expect(Math.abs(next.offset - pose.offset)).toBeLessThanOrEqual(1)
+  })
+})
+
+test('a finished pet stands still in the middle', () => {
+  const poses = loop(job({ status: 'done', finishedAt: 1 }))
+  expect(new Set(poses.map(pose => JSON.stringify(pose))).size).toBe(1)
+  expect(poses[0]).toEqual({ offset: PET_TRACK / 2, walking: false, working: false, step: 0 })
+})
+
+test('two pets started together are at different points of their loop', () => {
+  const a = loop(job({ id: 'toolu_01AAA' })).map(pose => pose.offset)
+  const b = loop(job({ id: 'toolu_01BBB' })).map(pose => pose.offset)
+  expect(a).not.toEqual(b)
+})
+
+test('every frame draws the pet plus its track, the same width', () => {
+  const kinds = [
+    job({ label: 'Plan/opus', worker: 'Opus' }),
+    job({ label: 'x/sonnet', worker: 'Sonnet' }),
+    job({ label: 'Explore/haiku', worker: 'Haiku' }),
+    job({ label: 'codex:implement' }),
+    job({ label: 'agy:run', worker: 'agy' }),
+    job({ label: 'claude:run', worker: 'Claude CLI' }),
+  ]
+  for (const one of kinds) {
+    const width = new Set<number>()
+    for (let frame = 0; frame < PET_LOOP_FRAMES; frame++) {
+      for (const row of shape(petRows(one, frame))) {
+        width.add([...row].length)
+      }
+    }
+    expect(width.size).toBe(1)
+  }
+})
+
+test('while working, each pet acts out its job', () => {
+  const working = (one: Job) => {
+    const frames = new Set<string>()
+    for (let frame = 0; frame < PET_LOOP_FRAMES; frame++) {
+      if (petPose(one, frame).working) {
+        frames.add(JSON.stringify(petRows(one, frame)))
+      }
+    }
+    return frames.size
+  }
+  for (const one of [
+    job({ label: 'Plan/opus', worker: 'Opus' }), // monocle glints
+    job({ label: 'x/sonnet', worker: 'Sonnet' }), // hammer swings
+    job({ label: 'Explore/haiku', worker: 'Haiku' }), // waves
+    job({ label: 'codex:implement' }), // types
+    job({ label: 'agy:run', worker: 'agy' }), // rainbow slides
+    job({ label: 'claude:run', worker: 'Claude CLI' }), // looks around
+  ]) {
+    expect(working(one)).toBeGreaterThan(2) // more than one look at each end of the track
+  }
 })
