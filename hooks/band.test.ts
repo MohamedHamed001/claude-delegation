@@ -26,7 +26,7 @@ function engineBeneath(on: On) {
 }
 
 /** One Agent call: finished when it returns, unless it runs in the background. */
-function agent(subagentType: string, model: string, background: boolean) {
+function agent(subagentType: string, model: string | undefined, background: boolean) {
   return {
     tool: 'Agent',
     description: `${subagentType} work`,
@@ -59,6 +59,35 @@ for (const surface of SURFACES) {
     expect(await ui.find({ type: 'Text', text: 'codex:implement ✗' })).toBeDefined()
     const texts = await ui.findAll({ type: 'Text' })
     expect(texts.some(text => text.props.color === 'error')).toBe(true) // the pet is red
+    await ui.unmount()
+  })
+
+  test(`a subagent Claude gave no model gets the pet of the model it runs on (${surface})`, async ($, on) => {
+    engineBeneath(on)
+    // Like the engine: running the Agent tool spawns the subagent, and core resolves the
+    // model it inherits. Here it reports Opus, and no agent id.
+    on('agent.spawn', () => ({ model: 'claude-opus-5-5' }) as never)
+    let callId = ''
+    on('tool.call', (_$, e) => {
+      callId = (e as { tool_use_id: string }).tool_use_id
+
+      return { result: { text: 'started' } } as never
+    })
+
+    await $.tool.call(agent('general-purpose', undefined, true))
+    await $.agent.spawn({
+      tool_use_id: callId,
+      description: 'general-purpose work',
+      prompt: 'Review the design',
+      subagentType: 'general-purpose',
+      parentModel: 'claude-opus-5-5',
+      background: true,
+    } as never)
+
+    const ui = await $.ui.mount({ plugin: 'delegation', surface, ...BAND })
+    expect(await ui.find({ type: 'Text', text: 'general-purpose/opus ◌' })).toBeDefined()
+    const texts = await ui.findAll({ type: 'Text' })
+    expect(texts.some(text => text.props.color === '#e5c07b')).toBe(true) // Opus's gold monocle
     await ui.unmount()
   })
 
