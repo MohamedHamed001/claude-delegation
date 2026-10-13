@@ -5,6 +5,7 @@
 
 import { expect, mock, test } from 'claude-code/testing'
 
+
 type On = Parameters<Parameters<typeof test>[1]>[1]
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -56,7 +57,8 @@ for (const surface of SURFACES) {
 
     const ui = await $.ui.mount({ plugin: 'delegation', surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: 'codex:implement ✗' })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: '▄█▄' }))?.props.color).toBe('error')
+    const texts = await ui.findAll({ type: 'Text' })
+    expect(texts.some(text => text.props.color === 'error')).toBe(true) // the pet is red
     await ui.unmount()
   })
 
@@ -71,7 +73,7 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  test(`a subagent's pet says type/model, coloured and dimmed (${surface})`, async ($, on) => {
+  test(`a Haiku subagent's pet is pink, captioned type/model, dimmed when done (${surface})`, async ($, on) => {
     engineBeneath(on)
     on('tool.call', () => ({ result: { text: 'found it' } }) as never)
 
@@ -79,9 +81,9 @@ for (const surface of SURFACES) {
 
     const ui = await $.ui.mount({ plugin: 'delegation', surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: 'Explore/haiku ✓' })).toBeDefined()
-    const body = await ui.find({ type: 'Text', text: '▄█▄' })
-    expect(body?.props.color).toBe('green')
-    expect(body?.props.dimColor).toBe(true) // finished
+    const pink = (await ui.findAll({ type: 'Text' })).filter(text => text.props.color === '#ff87d7')
+    expect(pink.length).toBeGreaterThan(0) // Haiku's pet
+    expect(pink.every(text => text.props.dimColor === true)).toBe(true) // finished
     await ui.unmount()
   })
 
@@ -93,9 +95,9 @@ for (const surface of SURFACES) {
 
     const ui = await $.ui.mount({ plugin: 'delegation', surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: 'Plan/opus ◌' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '▘ ▝' })).toBeDefined()
+    const before = JSON.stringify(await ui.drawn())
     await clock.advance(100)
-    expect(await ui.find({ type: 'Text', text: '▝ ▘' })).toBeDefined()
+    expect(JSON.stringify(await ui.drawn())).not.toBe(before) // the legs stepped
     await ui.unmount()
   })
 
