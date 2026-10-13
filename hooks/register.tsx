@@ -56,6 +56,7 @@ import {
   platformFromUname,
   parseRelay,
   relayFailed,
+  relayModel,
   refusalReason,
   scarceQuestion,
   userAskedToDelegate,
@@ -731,11 +732,12 @@ export const register: Register = on => {
   // The spawn event links the tool call to the subagent's id and its real model.
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
-    if (spawned.agentId) {
-      const agentId = spawned.agentId
+    // The model is known even when no id came back (a remote workflow agent has none).
+    if (spawned.model || spawned.agentId) {
+      const agentId = spawned.agentId ?? null
       await changeJob($, e.tool_use_id, job => ({
         ...job,
-        agentId,
+        agentId: agentId ?? job.agentId,
         model: spawned.model ?? job.model,
         worker: job.worker === 'Subagent' ? subagentWorker(spawned.model) : job.worker,
         // "Explore/inherit" becomes "Explore/opus"; a rescue's "codex:rescue" stays.
@@ -791,7 +793,7 @@ export const register: Register = on => {
         const job: Job = {
           id: e.tool_use_id,
           worker: relay.worker,
-          model: relay.model ?? (relay.lane ? `lane ${relay.lane}` : null),
+          model: relayModel(relay, lanes),
           title: brief ? titleFromBrief(brief) : 'delegated task',
           label: relayLabel(relay.skill, relay.lane),
           startedAt: await $.clock.now(),

@@ -13,6 +13,7 @@ import {
   petPose,
   petMark,
   relayFailed,
+  relayModel,
   relayLabel,
   subagentLabel,
   FINISHED_SHOWN_MS,
@@ -441,4 +442,18 @@ test('while working, each pet acts out its job', () => {
   ]) {
     expect(working(one)).toBeGreaterThan(2) // more than one look at each end of the track
   }
+})
+
+test("a relay's model: its flag, else its lane's model, else the lane", () => {
+  const lanes = { implement: { implementer: 'claude', model: 'sonnet' }, review: { implementer: 'claude' } }
+  expect(relayModel({ model: 'opus', lane: 'implement' }, lanes)).toBe('opus')
+  expect(relayModel({ model: null, lane: 'implement' }, lanes)).toBe('sonnet')
+  expect(relayModel({ model: null, lane: 'review' }, lanes)).toBe('lane review')
+  expect(relayModel({ model: null, lane: null }, lanes)).toBeNull()
+})
+
+test('a Claude relay on a Sonnet lane gets Sonnet\'s pet', () => {
+  expect(petKind(job({ worker: 'Claude CLI', label: 'claude:implement', model: 'sonnet' }))).toBe('sonnet')
+  expect(petKind(job({ worker: 'Claude CLI', label: 'claude:deep', model: 'claude-opus-5-5' }))).toBe('opus')
+  expect(petKind(job({ worker: 'Claude CLI', label: 'claude:run', model: null }))).toBe('claude') // CLI default: unknown
 })

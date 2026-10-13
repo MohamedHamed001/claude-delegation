@@ -104,6 +104,22 @@ export function relayFailed(output: string): boolean {
   )
 }
 
+/**
+ * The model a relay call runs on: its --model flag, else the model its lane names in the
+ * lane map, else the lane itself ("lane implement") when the map names no model. The pet
+ * takes its look from this, so a Claude relay on a Sonnet lane gets Sonnet's pet.
+ */
+export function relayModel(relay: Pick<RelayCall, 'model' | 'lane'>, lanes: Record<string, Lane>): string | null {
+  if (relay.model) {
+    return relay.model
+  }
+  if (!relay.lane) {
+    return null
+  }
+
+  return lanes[relay.lane]?.model ?? `lane ${relay.lane}`
+}
+
 /** The worker name for a Claude subagent, from the model it was asked to use. */
 export function subagentWorker(model: string | undefined): string {
   if (!model) {
