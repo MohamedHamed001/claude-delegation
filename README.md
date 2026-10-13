@@ -54,7 +54,7 @@ So the plugin's default is: **do the work yourself**, and delegate only when it 
 | Policy | Added to every session's system prompt, so nobody has to copy rules into `CLAUDE.md`. Delegate only: large separable work with a check the worker can run; work that should move off the Claude limit (Codex); when you ask; read-only review; fast read-only exploration (agy). |
 | Enforcement | A delegation whose brief names only one or two files is refused, and Claude is told to do it directly. Allowed anyway when you asked for delegation, or when it is read-only. |
 | Plain words | Saying "delegate this", "hand this over" or naming a worker (Codex, agy, Sonnet) counts as asking, no slash command needed. |
-| Band | One line above the prompt while a job runs, when it finishes, or when it has run for 15+ minutes, with a **Stop** button. |
+| Band | Above the prompt: a small pet for each delegated job, captioned `codex:implement` or `Explore/haiku`, its legs moving while the job runs; coloured by worker (green for exploring, blue Sonnet, purple Opus or planning, yellow Codex, pink agy, orange anything else), dimmed when done and red when it failed. Under the pets, one line on the newest job (or a warning when one has run for 15+ minutes), with **Stop**, **Delegations** and **Hide** buttons. A new prompt clears finished pets; **Hide** hides the band until then. |
 | Pane | `Delegations` button or `/delegations`: jobs running now, every job this session with what it cost, today's totals across sessions, and the cost test's findings. |
 | Skills | `codex-delegate`, `agy-delegate`, `claude-delegate`, `delegate-setup`, `gpt-5-4-prompting`, `codex-result-handling`. |
 

@@ -890,68 +890,111 @@ export const register: Register = on => {
 
   // ---- Drawing --------------------------------------------------------------------------
 
-  // The band: one line in the shared three-column layout, above what others draw.
+  // The band: a pet for each job, over one line in the shared three-column layout, above
+  // what others draw.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
-    if (e.props.hasSurvey) {
+    if (e.props.hasSurvey || (await read($, bandHidden))) {
       return beneath
     }
     const time = await read($, now)
-    const band = bandFor(await read($, jobs), time)
-    if (band.kind === 'hidden') {
+    const list = await read($, jobs)
+    const band = bandFor(list, time)
+    const pets = bandJobs(list, await read($, bandClearedAt))
+    if (band.kind === 'hidden' && pets.length === 0) {
       return beneath
     }
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const job = band.job
-    const who = `${job.worker}${job.model ? ` (${job.model})` : ''}`
+    const step = await read($, frame)
+    const job = band.kind === 'hidden' ? null : band.job
+    const who = job ? `${job.worker}${job.model ? ` (${job.model})` : ''}` : ''
 
     return (
       <Box flexDirection="column" rowGap={1}>
         {/* Its own filled card, one per plugin, so stacked bands read as separate. */}
-        <Box columnGap={1} alignItems="center" backgroundColor="userMessageBackground" paddingX={1}>
-          <Box width={2}>
-            {band.kind === 'running' && <Text color="warning">⠹</Text>}
-            {band.kind === 'advice' && <Text color="warning">i</Text>}
-            {band.kind === 'long' && <Text color="warning">!</Text>}
-            {band.kind === 'finished' && (
-              <Text color={job.status === 'done' ? 'success' : 'error'}>{job.status === 'done' ? '✓' : '✗'}</Text>
-            )}
-          </Box>
+        <Box flexDirection="column" backgroundColor="userMessageBackground" paddingX={1}>
+          {pets.length > 0 && (
+            <Box key="pets" columnGap={2} flexWrap="wrap">
+              {pets.map(pet => {
+                const label = pet.label ?? pet.worker
+                const [body, legs] = petSprite(pet, step)
+                // A failed job's pet is red; a finished one is dimmed in its own colour.
+                const colour = pet.status === 'failed' ? 'error' : petColour(label)
+                const dim = pet.status === 'done' || pet.status === 'stopped'
 
-          <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-            {band.kind === 'running' && (
-              <Text wrap="truncate-end">
-                {who} · {job.title} · {formatElapsed(time - job.startedAt)}
-                {band.count > 1 ? ` · ${band.count} running` : ''}
-              </Text>
-            )}
-            {band.kind === 'advice' && (
-              <Text color="warning" wrap="truncate-end">
-                {SMALL_TASK_ADVICE}
-              </Text>
-            )}
-            {band.kind === 'long' && (
-              <Text color="warning" wrap="truncate-end">
-                {who} running for {formatElapsed(time - job.startedAt)}. Still working?
-              </Text>
-            )}
-            {band.kind === 'finished' && (
-              <Text wrap="truncate-end">
-                {job.worker} {job.status} in {formatElapsed((job.finishedAt ?? time) - job.startedAt)}
-                {job.filesChanged !== null ? ` · ${job.filesChanged} files changed` : ''} · {job.title}
-              </Text>
-            )}
-          </Box>
-
-          {band.kind !== 'finished' && job.aliveMarker && job.status === 'running' && (
-            <Button key="band-stop" label="Stop" onPress={() => stopJob($, job)} />
+                return (
+                  <Box key={`pet:${pet.id}`} flexDirection="column" alignItems="center">
+                    <Text color={colour} dimColor={dim}>
+                      {body}
+                    </Text>
+                    <Text color={colour} dimColor={dim}>
+                      {legs}
+                    </Text>
+                    <Text key={`caption:${pet.id}`} dimColor={dim}>
+                      {label} {petMark(pet)}
+                    </Text>
+                  </Box>
+                )
+              })}
+            </Box>
           )}
-          <Button
-            key="open-delegations"
-            label="Delegations"
-            onPress={() => $.ui.open({ id: PANE, title: 'Delegations' })}
-          />
+
+          <Box columnGap={1} alignItems="center">
+            {band.kind !== 'hidden' && job && (
+              <Box flexGrow={1} flexShrink={1} minWidth={0} columnGap={1} alignItems="center">
+                <Box width={2}>
+                  {band.kind === 'running' && <Text color="warning">⠹</Text>}
+                  {band.kind === 'advice' && <Text color="warning">i</Text>}
+                  {band.kind === 'long' && <Text color="warning">!</Text>}
+                  {band.kind === 'finished' && (
+                    <Text color={job.status === 'done' ? 'success' : 'error'}>{job.status === 'done' ? '✓' : '✗'}</Text>
+                  )}
+                </Box>
+
+                <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                  {band.kind === 'running' && (
+                    <Text wrap="truncate-end">
+                      {who} · {job.title} · {formatElapsed(time - job.startedAt)}
+                      {band.count > 1 ? ` · ${band.count} running` : ''}
+                    </Text>
+                  )}
+                  {band.kind === 'advice' && (
+                    <Text color="warning" wrap="truncate-end">
+                      {SMALL_TASK_ADVICE}
+                    </Text>
+                  )}
+                  {band.kind === 'long' && (
+                    <Text color="warning" wrap="truncate-end">
+                      {who} running for {formatElapsed(time - job.startedAt)}. Still working?
+                    </Text>
+                  )}
+                  {band.kind === 'finished' && (
+                    <Text wrap="truncate-end">
+                      {job.worker} {job.status} in {formatElapsed((job.finishedAt ?? time) - job.startedAt)}
+                      {job.filesChanged !== null ? ` · ${job.filesChanged} files changed` : ''} · {job.title}
+                    </Text>
+                  )}
+                </Box>
+              </Box>
+            )}
+            {band.kind === 'hidden' && <Box flexGrow={1} />}
+
+            {band.kind !== 'finished' && job && job.aliveMarker && job.status === 'running' && (
+              <Button key="band-stop" label="Stop" onPress={() => stopJob($, job)} />
+            )}
+            <Button
+              key="open-delegations"
+              label="Delegations"
+              onPress={() => $.ui.open({ id: PANE, title: 'Delegations' })}
+            />
+            {/* Out of the way until the next prompt; the pane still has everything. */}
+            <Button
+              key="band-hide"
+              label="Hide"
+              onPress={() => update($, bandHidden, () => true).catch(err => reportFailure($, 'hiding the band', err))}
+            />
+          </Box>
         </Box>
         {beneath}
       </Box>
