@@ -7,6 +7,9 @@ import {
   bandJobs,
   petKind,
   petRows,
+  petGrid,
+  petSvg,
+  PET_PIXEL_PX,
   PET_DESIGNS,
   PET_LOOP_FRAMES,
   PET_TRACK,
@@ -456,4 +459,34 @@ test('a Claude relay on a Sonnet lane gets Sonnet\'s pet', () => {
   expect(petKind(job({ worker: 'Claude CLI', label: 'claude:implement', model: 'sonnet' }))).toBe('sonnet')
   expect(petKind(job({ worker: 'Claude CLI', label: 'claude:deep', model: 'claude-opus-5-5' }))).toBe('opus')
   expect(petKind(job({ worker: 'Claude CLI', label: 'claude:run', model: null }))).toBe('claude') // CLI default: unknown
+})
+
+// ---- The desktop's SVG pet -----------------------------------------------------------------
+
+test('the desktop SVG draws one square per pet pixel, and is as big as the grid', () => {
+  const one = job({ label: 'x/sonnet', worker: 'Sonnet' })
+  for (let frame = 0; frame < 12; frame++) {
+    const grid = petGrid(one, frame)
+    const svg = petSvg(one, frame)
+    const filled = grid.flat().filter(Boolean).length
+    expect(svg.source.match(/<rect /g)?.length).toBe(filled)
+    expect(svg.width).toBe((grid[0]?.length ?? 0) * PET_PIXEL_PX)
+    expect(svg.height).toBe(grid.length * PET_PIXEL_PX)
+  }
+})
+
+test('the desktop SVG: a finished pet faded, a failed one red, no theme names in it', () => {
+  expect(petSvg(job({ status: 'done', finishedAt: 1 }), 0).source).toContain('opacity="0.45"')
+  expect(petSvg(job({}), 0).source).not.toContain('opacity')
+  const failed = petSvg(job({ status: 'failed', finishedAt: 1 }), 0).source
+  expect(new Set([...failed.matchAll(/fill="([^"]+)"/g)].map(match => match[1]))).toEqual(new Set(['#e06c75']))
+})
+
+test('the terminal text and the desktop SVG come from the same grid', () => {
+  const one = job({ label: 'agy:run', worker: 'agy' })
+  for (let frame = 0; frame < 30; frame++) {
+    const grid = petGrid(one, frame)
+    expect(petRows(one, frame)).toHaveLength(Math.ceil(grid.length / 2))
+    expect(shape(petRows(one, frame))[0]?.length).toBe(grid[0]?.length)
+  }
 })

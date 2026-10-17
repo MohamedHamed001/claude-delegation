@@ -32,6 +32,7 @@ import {
   bandFor,
   bandJobs,
   petRows,
+  petSvg,
   petMark,
   relayLabel,
   subagentLabel,
@@ -906,7 +907,12 @@ export const register: Register = on => {
       return beneath
     }
 
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Button, Text } = ui
+    // The desktop draws Text in its own font, so pixel art made of half blocks breaks
+    // there; it draws Svg, the pet's pixels as squares. Ask the surface, not the table:
+    // the terminal's table carries an Svg constructor too, which it cannot draw.
+    const Svg = e.surface !== 'terminal' && 'Svg' in ui ? ui.Svg : null
     const step = await read($, frame)
     const job = band.kind === 'hidden' ? null : band.job
     const who = job ? `${job.worker}${job.model ? ` (${job.model})` : ''}` : ''
@@ -924,7 +930,14 @@ export const register: Register = on => {
 
                 return (
                   <Box key={`pet:${pet.id}`} flexDirection="column" alignItems="center">
-                    {petRows(pet, step).map((row, i) => (
+                    {Svg && (
+                      <Svg
+                        key={`pet:${pet.id}:svg`}
+                        alt={`${label} pet`}
+                        {...petSvg(pet, step)}
+                      />
+                    )}
+                    {!Svg && petRows(pet, step).map((row, i) => (
                       <Box key={`pet:${pet.id}:${i}`}>
                         {row.map((run, j) => (
                           <Text

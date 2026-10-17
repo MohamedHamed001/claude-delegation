@@ -460,32 +460,30 @@ function addRun(runs: PetRun[], run: PetRun) {
   }
 }
 
+/** One pixel's colour, or null where the pet is not (its eyes, and the track around it). */
+export type PetGrid = (string | null)[][]
+
 /**
- * The pet's text rows at a frame, ready to draw, as wide as the pet plus its track.
- * Each text cell holds two pixels, one above the other: ▀ the top, ▄ the bottom, █ both;
- * when both are filled in different colours the cell is ▀ in the top colour on a
- * background of the bottom colour. Cells next to each other with the same colours are
- * joined into one run. A failed job's pet is all red.
+ * The pet at a frame as a grid of pixel colours, placed on its track: as wide as the pet
+ * plus PET_TRACK, as tall as its design. Both renderers draw from this, the terminal's
+ * text (petRows) and the desktop's SVG (petSvg), so they always show the same pet.
+ * A failed job's pet is all 'error' (the theme's red).
  */
-export function petRows(job: Job, frame: number): PetRun[][] {
+export function petGrid(job: Job, frame: number): PetGrid {
   const design = PET_DESIGNS[petKind(job)]
   const pose = petPose(job, frame)
-  let pixels: string[]
+  let pixels: readonly string[]
   if (pose.walking) {
-    pixels = pose.step % 2 === 1 ? stepping(design.pixels) : [...design.pixels]
+    pixels = pose.step % 2 === 1 ? stepping(design.pixels) : design.pixels
   } else if (pose.working) {
-    pixels = [...(design.work[pose.step % design.work.length] ?? design.pixels)]
+    pixels = design.work[pose.step % design.work.length] ?? design.pixels
   } else {
-    pixels = [...design.pixels]
-  }
-  if (pixels.length % 2 === 1) {
-    pixels.push('.'.repeat(pixels[0]?.length ?? 0))
+    pixels = design.pixels
   }
   // agy's rainbow slides one column per work step.
   const slide = pose.working ? pose.step : 0
 
-  const colourAt = (row: number, column: number): string | null => {
-    const pixel = pixels[row]?.[column] ?? '.'
+  const colourOf = (pixel: string, column: number): string | null => {
     if (pixel === '.') {
       return null
     }
@@ -502,15 +500,28 @@ export function petRows(job: Job, frame: number): PetRun[][] {
     return design.body[(column + slide) % design.body.length] ?? null
   }
 
+  return pixels.map(row => [
+    ...Array<null>(pose.offset).fill(null),
+    ...[...row].map((pixel, column) => colourOf(pixel, column)),
+    ...Array<null>(PET_TRACK - pose.offset).fill(null),
+  ])
+}
+
+/**
+ * The pet's text rows at a frame, for the terminal. Each text cell holds two pixels,
+ * one above the other: ▀ the top, ▄ the bottom, █ both; when both are filled in
+ * different colours the cell is ▀ in the top colour on a background of the bottom
+ * colour. Cells next to each other with the same colours are joined into one run.
+ */
+export function petRows(job: Job, frame: number): PetRun[][] {
+  const grid = petGrid(job, frame)
+  const width = grid[0]?.length ?? 0
   const rows: PetRun[][] = []
-  for (let row = 0; row < pixels.length; row += 2) {
+  for (let row = 0; row < grid.length; row += 2) {
     const runs: PetRun[] = []
-    if (pose.offset > 0) {
-      addRun(runs, { text: ' '.repeat(pose.offset) })
-    }
-    for (let column = 0; column < (pixels[row]?.length ?? 0); column++) {
-      const top = colourAt(row, column)
-      const bottom = colourAt(row + 1, column)
+    for (let column = 0; column < width; column++) {
+      const top = grid[row]?.[column] ?? null
+      const bottom = grid[row + 1]?.[column] ?? null // an odd last row has no pixel below
       if (top && bottom) {
         addRun(runs, top === bottom ? { text: '█', color: top } : { text: '▀', color: top, backgroundColor: bottom })
       } else if (top) {
@@ -521,13 +532,43 @@ export function petRows(job: Job, frame: number): PetRun[][] {
         addRun(runs, { text: ' ' })
       }
     }
-    if (pose.offset < PET_TRACK) {
-      addRun(runs, { text: ' '.repeat(PET_TRACK - pose.offset) })
-    }
     rows.push(runs)
   }
 
   return rows
+}
+
+/** How big one pet pixel is on the desktop, in CSS pixels. */
+export const PET_PIXEL_PX = 4
+/** The SVG has no theme: the red a failed pet is drawn in there. */
+const SVG_ERROR = '#e06c75'
+
+/**
+ * The pet at a frame as an SVG, for the desktop, which draws text in its own font and
+ * so cannot show half-block pixel art: one square per pixel, at PET_PIXEL_PX each.
+ * A finished pet is drawn faded, as the terminal dims it.
+ */
+export function petSvg(job: Job, frame: number): { source: string; width: number; height: number } {
+  const grid = petGrid(job, frame)
+  const width = (grid[0]?.length ?? 0) * PET_PIXEL_PX
+  const height = grid.length * PET_PIXEL_PX
+  const squares: string[] = []
+  grid.forEach((row, y) =>
+    row.forEach((colour, x) => {
+      if (colour) {
+        const fill = colour === 'error' ? SVG_ERROR : colour
+        squares.push(
+          `<rect x="${x * PET_PIXEL_PX}" y="${y * PET_PIXEL_PX}" width="${PET_PIXEL_PX}" height="${PET_PIXEL_PX}" fill="${fill}"/>`,
+        )
+      }
+    }),
+  )
+  const faded = job.status === 'done' || job.status === 'stopped' ? ' opacity="0.45"' : ''
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
+    `viewBox="0 0 ${width} ${height}" shape-rendering="crispEdges"><g${faded}>${squares.join('')}</g></svg>`
+
+  return { source, width, height }
 }
 
 /** The mark after a pet's caption: what state the job is in. */
