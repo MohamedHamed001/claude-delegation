@@ -48,7 +48,6 @@ import {
   isCodexRescue,
   isReadOnly,
   isReadOnlyRequest,
-  isScarceRun,
   isSmall,
   killMatchingArgv,
   laneMapText,
@@ -59,7 +58,8 @@ import {
   relayFailed,
   relayModel,
   refusalReason,
-  scarceQuestion,
+  confirmQuestion,
+  parseConfirmArg,
   userAskedToDelegate,
   subagentWorker,
   titleFromBrief,
@@ -74,11 +74,13 @@ import {
   splitArgs,
   withModel,
 } from './logic'
-import type { AgyJob, Lane, Platform, Usage, Worker, WorkerAction } from './logic'
+import type { AgyJob, Lane, PendingRun, Platform, Usage, Worker, WorkerAction } from './logic'
 
 const PANE = 'delegations'
 const TICK_MS = 15_000
 const DAYS_KEY = 'days'
+/** Store key: true when every delegation asks before it starts (/delegate-confirm on). */
+const CONFIRM_KEY = 'confirm'
 const SMALL_TASK_ADVICE =
   'Small task: in your cost test, Opus solo was cheaper and faster for 1-file changes'
 
@@ -296,34 +298,40 @@ async function readBrief($: EngineInterface, path: string): Promise<string> {
   }
 }
 
-const SCARCE_RUN = 'Run it'
-const SCARCE_CANCEL = 'Cancel'
+const CONFIRM_RUN = 'Run it'
+const CONFIRM_CANCEL = 'Cancel'
+
+/** Is confirmation on? Off unless /delegate-confirm on was run; off too if the store fails. */
+async function confirmOn($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.store.get(CONFIRM_KEY)) === true
+  } catch {
+    return false
+  }
+}
 
 /**
- * Before a Codex run on the scarce model: show what is about to be sent and wait for a yes.
+ * With confirmation on: show what is about to be sent and wait for a yes.
  * Returns the refusal text when the person cancels, or null to let the run start.
  */
-async function scarceRefusal(
-  $: EngineInterface,
-  run: { model: string | null; lane: string | null; subcommand: string | null; brief: string },
-): Promise<string | null> {
-  if (!isScarceRun(run.model, run.lane, run.subcommand)) {
+async function confirmRefusal($: EngineInterface, run: PendingRun): Promise<string | null> {
+  if (!(await confirmOn($))) {
     return null
   }
-  let answer = SCARCE_CANCEL
+  let answer = CONFIRM_CANCEL
   try {
-    answer = await $.ui.ask(scarceQuestion(run), { header: 'Codex Sol', options: [SCARCE_RUN, SCARCE_CANCEL] })
+    answer = await $.ui.ask(confirmQuestion(run), { header: 'Delegation', options: [CONFIRM_RUN, CONFIRM_CANCEL] })
   } catch {
-    // Dismissed: treat it as Cancel, so the allowance is never spent by accident.
+    // Dismissed: treat it as Cancel, so nothing is spent by accident.
   }
-  if (answer === SCARCE_RUN) {
+  if (answer === CONFIRM_RUN) {
     return null
   }
 
   return (
-    "The user cancelled this Codex run in the delegation plugin's dialog" +
-    (answer !== SCARCE_CANCEL ? ` and wrote: "${answer}"` : '') +
-    '. Do not retry it; ask whether to narrow the brief or use a cheaper model (gpt-6-luna).'
+    `The user cancelled this ${run.worker} run in the delegation plugin's dialog` +
+    (answer !== CONFIRM_CANCEL ? ` and wrote: "${answer}"` : '') +
+    '. Do not retry it; ask whether to narrow the brief, use a cheaper model, or do it directly.'
   )
 }
 
@@ -549,6 +557,7 @@ export const register: Register = on => {
       { name: 'delegations', description: 'Open the delegations pane' },
       { name: 'delegate', description: 'Delegate a task, if it is worth it: /delegate <task>' },
       { name: 'explore', description: 'Ask agy a fast read-only question about the codebase: /explore <question>' },
+      { name: 'delegate-confirm', description: 'Ask before every delegation starts: /delegate-confirm on|off' },
     ]
     for (const worker of ['codex', 'agy'] as const) {
       const name = worker === 'codex' ? 'Codex' : 'agy'
@@ -621,6 +630,23 @@ export const register: Register = on => {
     return { text: 'Sent to Claude to ask agy.' }
   })
 
+  on('command.run', { command: 'delegate-confirm' }, async ($, e) => {
+    const setting = parseConfirmArg(e.args)
+    if (setting === 'invalid') {
+      return { text: 'Usage: /delegate-confirm on|off (no argument shows the setting)' }
+    }
+    if (setting !== null) {
+      await $.store.set(CONFIRM_KEY, setting)
+    }
+    const enabled = setting ?? (await confirmOn($))
+
+    return {
+      text: enabled
+        ? 'Confirmation is on: every delegation asks before it starts. /delegate-confirm off turns it off.'
+        : 'Confirmation is off: delegations start without asking. /delegate-confirm on turns it on.',
+    }
+  })
+
   on('command.run', { command: 'delegations' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Delegations' })
 
@@ -690,6 +716,18 @@ export const register: Register = on => {
 
       return { deny: refusal }
     }
+    // /codex:rescue is not asked about here: its forwarder runs a companion command, which asks.
+    if (!rescue) {
+      const cancelled = await confirmRefusal($, {
+        worker: subagentWorker(e.model),
+        model: e.model ?? null,
+        lane: null,
+        brief: e.prompt,
+      })
+      if (cancelled) {
+        return { deny: cancelled }
+      }
+    }
 
     const background = e.run_in_background !== false
     try {
@@ -757,10 +795,10 @@ export const register: Register = on => {
     on('tool.call', { tool: shell }, async ($, e, next) => {
       const companion = parseCompanion(e.command)
       if (companion && COMPANION_WORK.has(companion.subcommand)) {
-        const cancelled = await scarceRefusal($, {
+        const cancelled = await confirmRefusal($, {
+          worker: 'Codex',
           model: companion.model,
           lane: null,
-          subcommand: companion.subcommand,
           brief: companion.text,
         })
         if (cancelled) {
@@ -782,11 +820,14 @@ export const register: Register = on => {
 
         return { deny: refusal }
       }
-      if (relay.worker === 'Codex') {
-        const cancelled = await scarceRefusal($, { model: relay.model, lane: relay.lane, subcommand: null, brief })
-        if (cancelled) {
-          return { deny: cancelled }
-        }
+      const cancelled = await confirmRefusal($, {
+        worker: relay.worker,
+        model: relay.model ?? (relay.lane ? (lanes[relay.lane]?.model ?? null) : null),
+        lane: relay.lane,
+        brief,
+      })
+      if (cancelled) {
+        return { deny: cancelled }
       }
 
       const background = e.run_in_background === true

@@ -618,11 +618,12 @@ When the user says "delegate", "hand this over", "hand it off" or names a worker
 agy, Sonnet), treat it as a request to delegate, even without a slash command.
 
 This plugin ships the skills codex-delegate, agy-delegate, claude-delegate, delegate-setup,
-gpt-5-4-prompting and codex-result-handling; the commands /delegate, /explore, /delegate-setup
-and /delegations; and for Codex and for agy the same seven commands: rescue (hand over a task),
+gpt-5-4-prompting and codex-result-handling; the commands /delegate, /explore, /delegate-setup,
+/delegate-confirm and /delegations; and for Codex and for agy the same seven commands: rescue (hand over a task),
 review, adversarial-review, status, result, cancel and setup (/codex-review, /agy-rescue, ...).
 It refuses a delegation whose brief names only one or two files, unless the user asked for
-delegation or the delegation is read-only.`
+delegation or the delegation is read-only. With /delegate-confirm on, the user approves each
+delegation in a dialog before it starts; if they cancel, do not retry it.`
 
 /** Does the user's own message ask for delegation? Then a small delegation is allowed. */
 export function userAskedToDelegate(message: string): boolean {
@@ -708,35 +709,41 @@ export function parseCompanion(fullCommand: string): CompanionCall | null {
   }
 }
 
-// ---- Scarce runs: ask before spending the Sol allowance ----------------------------------
+// ---- Confirm before a delegation starts (off unless /delegate-confirm on) ------------------
 //
-// Sol (gpt-6.1-sol) is the strongest Codex model and its allowance is small: one large
-// adversarial review can use most of it. So a run that would use Sol first shows what is
-// about to be sent and waits for a yes. Cheaper models (Luna) run without a question.
+// Some models have a small allowance (Sol), and pricier ones may come. With confirmation on,
+// every delegation (Codex, agy, a Claude subagent, any relay) first shows what is about to
+// be sent and waits for a yes.
 
-/**
- * Would this Codex run use Sol? True when the model is named as Sol, when the lane is
- * `deep-review` (mapped to Sol), or for an adversarial review with no model given (Sol is
- * its default).
- */
-export function isScarceRun(model: string | null, lane: string | null, subcommand: string | null): boolean {
-  if (model) {
-    return /sol/i.test(model)
-  }
+/** A delegation about to start, as the confirmation question describes it. */
+export type PendingRun = { worker: string; model: string | null; lane: string | null; brief: string }
 
-  return lane === 'deep-review' || subcommand === 'adversarial-review'
-}
-
-/** The question shown before a scarce run: model, lane, and how much is being sent. */
-export function scarceQuestion(run: { model: string | null; lane: string | null; brief: string }): string {
-  const model = run.model ?? 'gpt-6.1-sol (the default here)'
+/** The question shown before a delegation: worker, model, lane, and how much is being sent. */
+export function confirmQuestion(run: PendingRun): string {
+  const model = run.model ? ` on ${run.model}` : ' on its default model'
   const lane = run.lane ? `, lane ${run.lane}` : ''
   const files = filesNamed(run.brief)
   const size = run.brief
     ? `The brief is ${run.brief.length.toLocaleString('en-US')} characters and names ${files} file${files === 1 ? '' : 's'}.`
     : 'It reviews the current changes; no brief text.'
 
-  return `Claude is about to start a Codex run on ${model}${lane}, the scarce model. ${size} Run it?`
+  return `Claude is about to start a ${run.worker} run${model}${lane}. ${size} Run it?`
+}
+
+/** /delegate-confirm's argument: true for on, false for off, null to show the setting, or 'invalid'. */
+export function parseConfirmArg(args: string): boolean | null | 'invalid' {
+  const word = args.trim().toLowerCase()
+  if (word === '') {
+    return null
+  }
+  if (word === 'on') {
+    return true
+  }
+  if (word === 'off') {
+    return false
+  }
+
+  return 'invalid'
 }
 
 /** The job id a background companion task reports, or null. */

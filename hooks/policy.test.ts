@@ -98,9 +98,21 @@ test('a codex-companion review is read-only and allowed', async ($, on) => {
   expect(ran).toBe(true)
 })
 
-/** Answers the Sol dialog with `answer`; any other tool call counts as the run starting. */
-function solDialog(on: any, answer: string) {
+/** An in-memory store, so /delegate-confirm's setting is kept between calls in one test. */
+function fakeStore(on: any) {
+  const saved = new Map<string, unknown>()
+  on('store.get', (_: unknown, e: { key: string }) => ({ value: saved.get(e.key) }))
+  on('store.set', (_: unknown, e: { key: string; value: unknown }) => {
+    saved.set(e.key, e.value)
+
+    return { value: undefined }
+  })
+}
+
+/** Answers the confirm dialog with `answer`; any other tool call counts as the run starting. */
+function confirmDialog(on: any, answer: string) {
   const state = { ran: false, asked: '' }
+  fakeStore(on)
   on('clock.now', () => ({ value: 1_000 }))
   on('tool.call', (_: unknown, e: { tool: string; questions: Array<{ question: string }> }) => {
     if (e.tool === 'AskUserQuestion') {
@@ -117,22 +129,50 @@ function solDialog(on: any, answer: string) {
 }
 
 const ADVERSARIAL = 'node "/plugins/codex/scripts/codex-companion.mjs" adversarial-review --wait'
+const RUN = { origin: { kind: 'composer' }, presentation: {} }
 
-test('a Sol run asks first, and Cancel stops it', async ($, on) => {
-  const state = solDialog(on, 'Cancel')
-  const answer = await $.tool.call({ tool: 'Bash', command: ADVERSARIAL } as never)
+test('confirmation is off by default: even a Sol run starts without a question', async ($, on) => {
+  const state = confirmDialog(on, 'Cancel')
+  await $.tool.call({ tool: 'Bash', command: `${ADVERSARIAL} --model gpt-6.1-sol` } as never)
 
-  expect(state.asked).toContain('gpt-6.1-sol')
+  expect(state.asked).toBe('')
+  expect(state.ran).toBe(true)
+})
+
+test('with confirmation on, any model asks first, and Cancel stops it', async ($, on) => {
+  const state = confirmDialog(on, 'Cancel')
+  await $.command.run({ ...RUN, command: 'delegate-confirm', args: 'on' } as never)
+  const answer = await $.tool.call({ tool: 'Bash', command: `${ADVERSARIAL} --model gpt-6-luna` } as never)
+
+  expect(state.asked).toContain('a Codex run on gpt-6-luna')
   expect(state.ran).toBe(false)
   expect(JSON.stringify(answer)).toContain('cancelled this Codex run')
 })
 
-test('a Sol run starts after Run it; a Luna run is never asked about', async ($, on) => {
-  const state = solDialog(on, 'Run it')
+test('with confirmation on, Run it starts the run, and a Claude subagent asks too', async ($, on) => {
+  const state = confirmDialog(on, 'Run it')
+  await $.command.run({ ...RUN, command: 'delegate-confirm', args: 'on' } as never)
   await $.tool.call({ tool: 'Bash', command: ADVERSARIAL } as never)
   expect(state.ran).toBe(true)
 
   state.asked = ''
-  await $.tool.call({ tool: 'Bash', command: `${ADVERSARIAL} --model gpt-6-luna` } as never)
+  await $.tool.call({
+    tool: 'Agent',
+    description: 'find usages',
+    prompt: 'Where is src/infrastructure/parsers/arxml_signal_parser.py imported?',
+    subagent_type: 'Explore',
+    model: 'haiku',
+    run_in_background: false,
+  } as never)
+  expect(state.asked).toContain('a Haiku run on haiku')
+})
+
+test('/delegate-confirm off turns it back off', async ($, on) => {
+  const state = confirmDialog(on, 'Cancel')
+  await $.command.run({ ...RUN, command: 'delegate-confirm', args: 'on' } as never)
+  await $.command.run({ ...RUN, command: 'delegate-confirm', args: 'off' } as never)
+  await $.tool.call({ tool: 'Bash', command: ADVERSARIAL } as never)
+
   expect(state.asked).toBe('')
+  expect(state.ran).toBe(true)
 })

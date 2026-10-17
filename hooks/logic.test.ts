@@ -26,9 +26,9 @@ import {
   EMPTY_DAY,
   filesNamed,
   formatElapsed,
-  isScarceRun,
   isSmall,
-  scarceQuestion,
+  confirmQuestion,
+  parseConfirmArg,
   parseRelay,
   subagentWorker,
   titleFromBrief,
@@ -254,20 +254,26 @@ test('an agy job is done, failed, running or has no result', () => {
   expect(agyStatusTable([], 0)).toContain('No agy jobs yet')
 })
 
-test('only runs that would use Sol are scarce', () => {
-  expect(isScarceRun('gpt-6.1-sol', null, 'task')).toBe(true)
-  expect(isScarceRun(null, 'deep-review', null)).toBe(true)
-  expect(isScarceRun(null, null, 'adversarial-review')).toBe(true) // Sol is its default
-  expect(isScarceRun('gpt-6-luna', null, 'adversarial-review')).toBe(false) // a named model wins
-  expect(isScarceRun('gpt-6-luna', 'implement', null)).toBe(false)
-  expect(isScarceRun(null, 'review', 'review')).toBe(false)
+test('the confirm question says the worker, the model, the lane and how much is sent', () => {
+  const question = confirmQuestion({
+    worker: 'Codex',
+    model: 'gpt-6.1-sol',
+    lane: 'deep-review',
+    brief: 'Review src/a.py and src/b.py for races.',
+  })
+  expect(question).toContain('a Codex run on gpt-6.1-sol, lane deep-review')
+  expect(question).toContain('names 2 files')
+
+  const review = confirmQuestion({ worker: 'Codex', model: null, lane: null, brief: '' })
+  expect(review).toContain('on its default model')
+  expect(review).toContain('no brief text')
 })
 
-test('the scarce question says the model, the lane and how much is sent', () => {
-  const question = scarceQuestion({ model: null, lane: 'deep-review', brief: 'Review src/a.py and src/b.py for races.' })
-  expect(question).toContain('gpt-6.1-sol')
-  expect(question).toContain('lane deep-review')
-  expect(question).toContain('names 2 files')
+test('/delegate-confirm takes on, off, or nothing to show the setting', () => {
+  expect(parseConfirmArg(' ON ')).toBe(true)
+  expect(parseConfirmArg('off')).toBe(false)
+  expect(parseConfirmArg('')).toBe(null)
+  expect(parseConfirmArg('yes')).toBe('invalid')
 })
 
 test('a relay or companion named inside a heredoc is file text, not a run', () => {

@@ -2,7 +2,7 @@
 
 A plugin for [Claude Code](https://docs.claude.com/en/docs/claude-code): **delegation**.
 
-Everything for delegating coding work: Codex, agy and Claude worker skills; /delegate, /explore, /delegate-setup and /delegations; the official Codex plugin's commands bundled as /codex-* with matching /agy-* commands (rescue, review, adversarial-review, status, result, cancel, setup); a measured delegation policy that refuses tasks too small to be worth it; and a live view of running jobs and what they cost.
+Everything for delegating coding work: Codex, agy and Claude worker skills; /delegate, /explore, /delegate-setup, /delegate-confirm and /delegations; the official Codex plugin's commands bundled as /codex-* with matching /agy-* commands (rescue, review, adversarial-review, status, result, cancel, setup); a measured delegation policy that refuses tasks too small to be worth it; and a live view of running jobs and what they cost.
 
 Part of [claude-mods](https://github.com/MohamedHamed001/claude-mods), which lists this plugin and its siblings.
 
@@ -65,6 +65,7 @@ So the plugin's default is: **do the work yourself**, and delegate only when it 
 | `/delegate <task>` | Delegates the task if it is worth it under the policy; otherwise says why and does it directly |
 | `/explore <question>` | Asks agy a fast, read-only question about the codebase; Claude spot-checks its file and line claims |
 | `/delegate-setup` | Chooses which worker and model handles which kind of work (writes the lane map) |
+| `/delegate-confirm on\|off` | Asks before every delegation starts (off by default; no argument shows the setting) |
 | `/delegations` | Opens the pane |
 
 And the same seven commands for each worker:
@@ -128,10 +129,11 @@ Without a lane map the commands use the defaults above.
 - **The official Codex plugin.** This plugin bundles it (see [Credits](#licence)).
   If `codex@openai-codex` is installed as well, the bundled `/codex-*` commands step aside and
   point to its `/codex:*` ones; the policy and job tracking still apply to them.
-- **Sol asks first.** Sol (`gpt-6.1-sol`) has a small allowance. A Codex run that would use it (a
-  Sol `--model`, the `deep-review` lane, or an adversarial review with no model given) first shows
-  the model, the lane, and the brief's size and file count, with **Run it** and **Cancel**. Runs on
-  other models start without a question.
+- **Confirm before delegating.** Some models have a small allowance (Sol, `gpt-6.1-sol`), and
+  others may cost more. `/delegate-confirm on` makes every delegation (a Codex run, an agy or other
+  relay, a Claude subagent) first show the worker, the model, the lane, and the brief's size and
+  file count, with **Run it** and **Cancel**; closing the dialog counts as Cancel. It is off by
+  default, is kept across sessions, and `/delegate-confirm off` turns it off again.
 - **Cost figures.** Claude subagents report tokens, so their cost is shown. Codex and agy report
   nothing to Claude, so they show as calls and time, with the Opus requests made while they ran.
 

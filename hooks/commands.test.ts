@@ -30,6 +30,27 @@ test('/delegate answers at once, and with no task explains its usage', async ($,
   )
 })
 
+/** An in-memory store, so /delegate-confirm's setting is kept between calls in one test. */
+function fakeStore(on: any) {
+  const saved = new Map<string, unknown>()
+  on('store.get', (_: unknown, e: { key: string }) => ({ value: saved.get(e.key) }))
+  on('store.set', (_: unknown, e: { key: string; value: unknown }) => {
+    saved.set(e.key, e.value)
+
+    return { value: undefined }
+  })
+}
+
+test('/delegate-confirm shows, sets and rejects', async ($, on) => {
+  fakeStore(on)
+  const run = async (args: string) => JSON.stringify(await $.command.run({ ...RUN, command: 'delegate-confirm', args } as never))
+
+  expect(await run('')).toContain('Confirmation is off')
+  expect(await run('on')).toContain('Confirmation is on')
+  expect(await run('')).toContain('Confirmation is on')
+  expect(await run('maybe')).toContain('Usage: /delegate-confirm on|off')
+})
+
 test('/delegations opens the pane', async ($, on) => {
   on('ui.open', () => ({ value: {} }) as never)
 
